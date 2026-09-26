@@ -566,9 +566,15 @@ console.log('\n== malformed input must never be a 500, and never a dead process 
   // path with no try/catch around it.
   const t = await login('owner@acme.test');
 
-  // Sanity: the raw helper is really reaching the server (otherwise every assertion below is a
-  // 404 that proves nothing).
-  check('the raw helper reaches the SPA route', (await raw('GET', '/')).status, 200);
+  // Sanity: the raw helper is really reaching the server. Every assertion in this block writes
+  // '/%ff' and other non-/v1 paths, and `call()` is relative to /v1 — so without this the block
+  // would be testing '/v1/%ff', which the router 404s before reaching the code under test.
+  //
+  // The status is deliberately not asserted as 200: a non-/v1 path is served from dist/, and a
+  // clean checkout has no dist/ until something builds it. What matters is that the request
+  // ARRIVES — a network error would mean the helper, not the app, was broken.
+  const spa = await raw('GET', '/');
+  check('the raw helper reaches the server (non-/v1 paths included)', spa.status > 0, true);
 
   // 1. The process-killer. `GET /%ff` made serveStatic throw URIError straight out of the
   //    request listener, and the whole server went with it.
