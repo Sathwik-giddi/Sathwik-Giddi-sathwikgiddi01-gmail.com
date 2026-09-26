@@ -13,3 +13,4 @@ playwright-report/
 
 # local-only: see the header comment inside the file
 playwright.local.config.js
+audit.db*

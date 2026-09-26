@@ -155,6 +155,3 @@ export function stmt(db, name) {
   }
   return s;
 }
-
-/** Every statement this server knows about. Used by the query-count test in Phase 8. */
-export const statementNames = () => Object.keys(SQL);

@@ -105,11 +105,6 @@ export function assertNotLastOwner(db, orgId, userId) {
   throw lastOwner();
 }
 
-/** How many ACTIVE owners the org has. Used by the Admin card and by the tests. */
-export function ownerCount(db, orgId) {
-  return stmt(db, 'owners').all(orgId).length;
-}
-
 /**
  * The one implementation of "a session ends". Account and tenancy events cascade; permission
  * changes never come through here, because there is deliberately no `permission_revoked` reason
@@ -161,37 +156,6 @@ export function expireStaleSessions(db, { orgId = null } = {}) {
 export function sessionExpiry(db, orgId) {
   const minutes = stmt(db, 'maxSessionMinutes').get(orgId)?.max_session_minutes ?? 60;
   return new Date(Date.now() + minutes * 60_000).toISOString();
-}
-
-/**
- * The `sessions.authorized_by` snapshot: the authority as it was at the moment the session was
- * allowed. This row is the whole justification for grandfathering (PERMISSIONS.md §7.1), so it
- * records the grants that actually decided the two permissions in question rather than every
- * grant the user happens to hold.
- *
- * `decide(deviceId) => permissions` is passed in rather than imported, because this module must
- * not depend on the resolution engine: `roles.rank` and allow/deny are separate concerns and
- * keeping the dependency arrow pointing one way is what stops rank logic leaking into a
- * permission answer later.
- */
-export function snapshotAuthority(db, { userId, orgId, deviceId, mode, decide }) {
-  const here = decide(deviceId);
-
-  const keys = ['session:start'];
-  const modePermission = MODE_TO_PERMISSION[mode];
-  if (modePermission) keys.push(modePermission);
-
-  const grantIds = [];
-  for (const key of keys) {
-    const source = here[key]?.source;
-    if (typeof source === 'string' && source.startsWith('grant:')) {
-      const id = source.slice('grant:'.length);
-      if (!grantIds.includes(id)) grantIds.push(id);
-    }
-  }
-
-  const membership = stmt(db, 'membershipByOrgUser').get(orgId, userId);
-  return { role: membership?.role ?? null, grantIds, snapshotAt: nowIso() };
 }
 
 // The mode -> permission map is a property of the mode, not a resolution, which is why it can

@@ -15,7 +15,9 @@
 //     the only way to get a token for another org, which is what makes one-org-per-token (D18)
 //     structural rather than a filter.
 
-import { send, unauthenticated, forbidden, notFound, badRequest } from '../http.js';
+import { send, unauthenticated, forbidden, notFound, badRequest, tooManyRequests } from '../http.js';
+import { attempt, succeed, fail } from '../ratelimit.js';
+import { apiHeaders } from '../headers.js';
 import { verifyPassword, issueAccessToken, newRefreshToken, hashRefreshToken, REFRESH_TTL_SECONDS } from '../auth.js';
 import { stmt } from '../internal/sql.js';
 import { newId, nowIso } from '../db.js';
@@ -83,12 +85,26 @@ export function register(router) {
     const email = requireEmail(ctx.body.email);
     const password = requireString(ctx.body.password, 'password', { max: LIMITS.passwordMax });
 
+    // Throttle on the credential, before the KDF runs. A correct password is never counted, so this
+    // costs an honest user nothing and bounds only the guessing. See server/ratelimit.js for why it
+    // counts failures rather than requests.
+    const gate = attempt(ctx.req, email);
+    if (gate.limited) throw tooManyRequests(gate.retryAfter);
+
     const user = stmt(ctx.db, 'userByEmail').get(email);
 
     // One message, one status, whether the account exists or the password is wrong. The
     // comparison runs either way so a missing account does not answer measurably faster.
-    const ok = user ? verifyPassword(password, user.password_hash) : false;
-    if (!ok) throw unauthenticated(GENERIC_LOGIN_FAILURE);
+    //
+    // It is awaited rather than called synchronously because `verifyPassword` runs scrypt on the
+    // threadpool; see the note in server/auth.js. This is also why the gate above matters even
+    // after that fix: the KDF is the expensive part, and it is reachable without a credential.
+    const ok = user ? await verifyPassword(password, user.password_hash) : false;
+    if (!ok) {
+      fail(ctx.req, email);
+      throw unauthenticated(GENERIC_LOGIN_FAILURE);
+    }
+    succeed(ctx.req, email);
 
     const requested = ctx.body.orgId;
     let org;
@@ -226,7 +242,7 @@ export function register(router) {
     }
     clearRefreshCookie(res, _ctx.req);
     // 204: there is nothing to say. `ok: true` was a body describing an absence.
-    res.writeHead(204, { 'cache-control': 'no-store' });
+    res.writeHead(204, apiHeaders());
     res.end();
   });
 }

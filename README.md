@@ -44,7 +44,10 @@ now fatal at boot rather than a warning: a server that starts with a known signi
 healthy and fails open, which is worse than a server that does not start.
 
 `scripts/pentest.js` is the proof. It boots production the way `npm start` does, mints tokens with
-the old default, and reports what they bought.
+the old default, and reports what they bought. `scripts/audit.js` is the wider version — 108 checks
+across 17 vulnerability classes, each one probed against a running server rather than asserted from
+the source. `LAUNCH-GATE.md` maps both the audit and a 25-point pre-launch checklist onto it, and
+names what is still open.
 
 ## Test it
 
@@ -53,6 +56,7 @@ node scripts/check-permissions.js   # the resolution engine
 node scripts/check-jwt.js           # token verification — you implement this
 node scripts/check-api.js           # the HTTP contract
 node scripts/pentest.js             # the adversary's view — see "Run it" above
+node scripts/audit.js               # 17 vulnerability classes, 108 checks
 npx playwright test                 # the console contract
 ```
 

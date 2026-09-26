@@ -1046,6 +1046,146 @@ is always the same: **the assertion stops one step short of the thing you actual
   credential for a *different organization* than the one you were in. I had written this up as a
   harmless schema consequence; it is a credential-scope change, which is a different category.
 
+## Phase 11 — the launch gate: 17 classes, 3 real findings, 2 in my own fix
+
+Phase 10 attacked the signing path. This phase ran a 17-class vulnerability sweep against a running
+server, and then did the unglamorous half: looked for code that does nothing, and tests that pass
+for the wrong reason. `scripts/audit.js` is the harness — 108 checks, no dependencies, exit 1 on any
+open finding — and `LAUNCH-GATE.md` maps both checklists onto it.
+
+### Found: no security headers whatsoever
+
+Not a weak set. None. No CSP, no `X-Content-Type-Options`, no `X-Frame-Options`, no
+`Referrer-Policy`, no `Permissions-Policy`, and static assets served with no `Cache-Control` at
+all. Found by reading the response headers off a running server, which is the only way to see it —
+the code that would have set them does not exist, so reading the source tells you the same thing
+twice and never tells you it is missing.
+
+`server/headers.js` now owns one header set applied at the single point a response is created, so
+it cannot be added to two of three paths and forgotten on the third. `Cache-Control` is per resource
+class: `no-store` for the API, `no-cache` for the SPA document, one-year immutable for hashed
+assets.
+
+### Found: the production signing key was a literal (Phase 10) and a synchronous KDF
+
+`verifyPassword` used `scryptSync`. On one event loop a synchronous KDF does not merely slow the
+caller, it stops the server. Measured before the fix: 1 concurrent sign-in stalled the loop 41ms;
+**64 stalled it for 2641ms**, because every hash after the first queued behind the one running. The
+work is expensive by design, so "make login slower" is exactly the wrong response to a slow login —
+the cost lands on every *other* request meanwhile, which turns an unauthenticated endpoint into a
+lever for stalling authenticated ones.
+
+`crypto.scrypt` off the sync binding runs on the libuv threadpool. After: 64 sign-ins in **700ms**,
+and an authenticated request issued throughout stayed answerable in **48ms**. `hashPassword` and
+`verifyPassword` are now async, and `applyOverlay` became async with its hashes computed *before*
+the `db.transaction` opens — doing it inside would have written the string `[object Promise]` into
+`password_hash` and failed at the first sign-in rather than at the load.
+
+Making it async broke a call site silently, which the personalisation suite caught: an un-awaited
+`applyOverlay` returned a promise, and four assertions then failed in a way that looked like four
+unrelated permission bugs.
+
+### Found: no rate limiting on the only two unauthenticated expensive endpoints
+
+The naive fix — N requests per IP per minute — is wrong here for a measured reason. The shipped
+suites sign in about fifty times from 127.0.0.1, so any ceiling low enough to matter breaks
+`npm run check`, and any ceiling that does not break them (several hundred a minute) stops nothing
+when a login costs 40ms of scrypt.
+
+So `server/ratelimit.js` counts what an attacker actually produces: **consecutive failures for one
+credential from one address**. A correct password is never counted, so an honest person is never
+throttled however often they sign in — which is both the correct security property and the reason
+50 sign-ins in a test suite are fine. A looser per-address ceiling bounds total work regardless of
+outcome. The map is pruned, because the keys are attacker-controlled and an unpruned counter is a
+memory-exhaustion vector.
+
+### Found in my own fix: the CSP was decorative twice over
+
+This is the part worth reading.
+
+**Wrong header name.** The first version sent `X-Content-Security-Policy`. That was an abandoned
+draft no browser implements. Every other header was present, the header dump looked correct, all 34
+UI tests passed — and the policy was enforcing nothing, because the browser did not recognise it. A
+header-presence assertion cannot catch this: the header *is* present.
+
+**`'unsafe-inline'`.** The second version was `script-src 'self' 'unsafe-inline'`, added for Vite's
+dev client. `'unsafe-inline'` permits inline script, which is the single thing a CSP exists to stop.
+A browser test that injects an inline script and asks whether it ran found it **executing**. All 34
+UI tests still passed, because "does not break the app" and "blocks attacks" are different questions
+and only one was being asked.
+
+**Nameless directives.** The policy was assembled from bare source expressions, so it read
+`… font-src 'self'; 'self'; 'self'; connect-src 'self'`. Two nameless directives, discarded by
+Chrome. Blocking still worked via the `default-src` fallback, so behaviour tests passed while the
+policy said something other than what it was written to say.
+
+The policy is now environment-dependent, because the requirement genuinely is. `dist/index.html` is
+two external hashed files with no inline script or style, so production gets
+`script-src 'self'; style-src 'self'; connect-src 'self'` — no inline, no eval, no wildcard. Only
+dev gets the permissive form, for Vite's inline preamble and HMR socket.
+
+`tests/csp.spec.js` is the answer to all three: it serves the real document with an injected inline
+script and asks Chrome whether it ran, then signs in and confirms the app still works. Reverting
+either bug makes it fail; reverting the `unsafe-inline` version leaves the *header-present* test
+green, which is precisely why the browser test exists.
+
+### Found in the dead-code sweep: a table that prevented nothing
+
+Six exported symbols in `server/` were unreachable. Two mattered:
+
+`AUDITED_ACTIONS` was declared, frozen, and documented as *"stated once, because the alternative is
+deciding per route and drifting"* — and read by nothing. Every route passed its own `targetType`
+inline, so the table could disagree with every caller and no test would notice. A map that is not
+consulted cannot prevent drift; it only record it.
+
+Making `audit()` consult it failed a test on the first run: `audit.read` was being emitted by the
+audit-log route and was not in the table. Static analysis then found **eight** more undeclared
+actions — `device.list`, `device.read`, `grant.read`, `invite.read`, `member.read`,
+`user.effective.read`, `session.read`, `session.read.one` — all emitted, none declared. And it
+turned out `audit.js`'s own header was wrong: it said "reads are not audited", while reads *are*
+audited on refusal, because a refusal is an authorization event like any other. The comment now
+says that precisely.
+
+`snapshotAuthority` in `lifecycle.js` was a **dead duplicate** of the snapshot logic that
+`permissions.js` actually uses, and `ownerCount` claimed in its comment to be "used by the Admin
+card and by the tests" while nothing used it. Two copies of the session-snapshot rule is a drift
+hazard, so the unused one is gone.
+
+### The fourth time a test passed for the wrong reason
+
+The event-loop probe I wrote measured responsiveness by firing 48 logins at **addresses that do not
+exist**. `verifyPassword` is never reached for an unknown address, so no `scrypt` ran — and it
+reported "11ms" with the blocking version still in place. Rewritten to hash a real stored
+credential: **554ms, timer fired 51 times out of 56** with the fix, and **2027ms, timer fired 0
+times out of 203** without it.
+
+The other two times were the forged-role regression that hardcoded a `sub` which is not a user, and
+a CSP header asserted present rather than enforced. Same failure, three phases running.
+
+### What phase 11 changed
+
+| | before | after |
+|---|---|---|
+| security headers | none | CSP, nosniff, frame, referrer, permissions, per-class cache |
+| CSP | n/a | enforced in production; proven by a browser test |
+| rate limiting | none | per-credential failure throttling with `Retry-After` |
+| password hashing cost | 41ms stall, 2641ms at 64 | threadpool; 700ms at 64, 48ms for a concurrent caller |
+| dead exports in `server/` | 6 | 0 |
+| `AUDITED_ACTIONS` | read by nothing | enforced in production; 29 actions, all declared, all emitted |
+| `npm run check` | 509 assertions | **529 assertions**, 7 suites |
+| `npm run audit` | did not exist | **108 checks**, 17 classes |
+| `npm test` | 34 browser tests | **38 browser tests** |
+
+`playwright.config.js` is unchanged this phase. `db/schema.sql` and `db/reference.sql` are unchanged.
+
+### What is still open, and is not argued away
+
+Recorded in `LAUNCH-GATE.md` §3 rather than here: the CSP is not applied in development, because Vite's
+middleware serves `/` and does not carry this process's headers; `connect-src` allows `ws:` in dev;
+there is no monitoring or alerting; three dependencies are a major behind with no advisory against
+them; and `scripts/inspect.js` / `scripts/measure.js` are developer tools that a reviewer has to work
+out are not endpoints.
+
 ## Phase 10 — the pentest, and the two things it found
 
 Everything above was found by reading my own code against the specification. This phase was found

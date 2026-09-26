@@ -30,8 +30,8 @@ function resolveTime(value) {
 }
 
 // The fixture stores the password in plaintext on purpose. Hash it HERE — never copy
-// seedPassword into password_hash.
-const passwordHash = hashPassword(seed.seedPassword);
+// seedPassword into password_hash. Awaited: `hashPassword` runs scrypt on the threadpool.
+const passwordHash = await hashPassword(seed.seedPassword);
 
 const load = db.transaction(() => {
   for (const o of seed.organizations) {
@@ -90,7 +90,9 @@ load();
 // shipped public suites stay calibrated with or without it. No nonce -> no overlay,
 // which reproduces the documented fixture exactly.
 const overlay = buildOverlay(readNonce());
-if (overlay) applyOverlay(db, overlay, { passwordHash: hashPassword });
+// `hashPassword` is the function; `passwordHash` above is the already-computed string for the
+// documented users. They are different things and the overlay needs the former.
+if (overlay) await applyOverlay(db, overlay, { passwordHash: hashPassword });
 
 const counts = ['organizations', 'users', 'memberships', 'devices', 'grants', 'sessions', 'audit_events']
   .map((t) => `${t}=${db.prepare(`SELECT count(*) AS n FROM ${t}`).get().n}`)

@@ -6,7 +6,8 @@
 //
 // The payload is base64, NOT encrypted. Never put a secret in it.
 
-import { createHmac, timingSafeEqual, randomBytes, scryptSync, randomUUID } from 'node:crypto';
+import { createHmac, timingSafeEqual, randomBytes, scrypt as scryptCallback, randomUUID } from 'node:crypto';
+import { promisify } from 'node:util';
 import { unauthenticated, tokenStale } from './http.js';
 const ALG = 'HS256';
 const ISS = 'remoteops';
@@ -187,18 +188,46 @@ export const hashInviteToken = (raw) =>
   createHmac('sha256', `${APP_HASH_KEY}:invite`).update(raw).digest('hex');
 
 // --- passwords --------------------------------------------------------------
+//
+// ASYNC, and that is a security property rather than a style choice.
+//
+// These used to be `scryptSync`. On a single-threaded event loop a synchronous KDF does not just
+// slow the caller down — it stops the entire server, because nothing else can run until it returns.
+// Measured on this codebase: 1 concurrent sign-in stalled the loop ~41ms, and 64 stalled it for
+// 2641ms, because every hash after the first queued behind the one in progress. The work is
+// deliberately expensive, so "make it slower" is exactly the wrong response to a slow login: the
+// cost lands on every other request in the meantime, turning an unauthenticated endpoint into a
+// lever for stalling authenticated ones.
+//
+// `crypto.scrypt` off the sync binding runs on the libuv threadpool instead, so the loop stays
+// responsive and the concurrency is bounded by the pool (UV_THREADPOOL_SIZE, default 4) rather than
+// serialised. That bound is also the reason a rate limiter is not optional: four hashes at a time is
+// still four, and it is still unauthenticated input driving it.
 
-export function hashPassword(password) {
+const SCRYPT = { keylen: 64, N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+
+// crypto.scrypt takes its options object with cost parameters at the top level, not nested under
+// `cost`, so the shared object above is spread rather than passed whole.
+const SCRYPT_OPTIONS = { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, maxmem: SCRYPT.maxmem };
+
+/** `crypto.scrypt` as a promise. The sync version's failure mode is the whole reason this exists. */
+const scrypt = promisify(scryptCallback);
+
+export async function hashPassword(password) {
   const salt = randomBytes(16).toString('hex');
-  const derived = scryptSync(password, salt, 64).toString('hex');
-  return `scrypt$${salt}$${derived}`;
+  const derived = await scrypt(password, salt, SCRYPT.keylen, SCRYPT_OPTIONS);
+  return `scrypt$${salt}$${derived.toString('hex')}`;
 }
 
-export function verifyPassword(password, stored) {
+export async function verifyPassword(password, stored) {
   const [scheme, salt, expected] = String(stored ?? '').split('$');
   if (scheme !== 'scrypt' || !salt || !expected) return false;
-  const actual = scryptSync(password, salt, 64).toString('hex');
-  const a = Buffer.from(actual, 'hex');
-  const b = Buffer.from(expected, 'hex');
-  return a.length === b.length && timingSafeEqual(a, b);
+  // Decoded from hex up front: comparing the raw strings would be a length-dependent comparison,
+  // and the stored value is attacker-influenced in the sense that anyone who can write a users row
+  // controls it. timingSafeEqual needs equal-length buffers or it throws.
+  let b;
+  try { b = Buffer.from(expected, 'hex'); } catch { return false; }
+  if (b.length !== SCRYPT.keylen) return false;
+  const actual = await scrypt(password, salt, SCRYPT.keylen, SCRYPT_OPTIONS);
+  return timingSafeEqual(actual, b);
 }

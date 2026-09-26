@@ -237,19 +237,6 @@ export function resolve(db, { userId, orgId, deviceId = null, now = new Date() }
   return createResolver(db, { userId, orgId, now }).resolve(deviceId);
 }
 
-/**
- * Batched form for list endpoints: { role, byDevice: { [deviceId]: permissions } }.
- *
- * One catalogue read, one baseline read, one grant read — then every device is answered from
- * memory. Adding devices to an org adds no queries, which is the property BRIEF.md §6 asks for.
- */
-export function resolveDevices(db, { userId, orgId, deviceIds, now = new Date() }) {
-  const resolver = createResolver(db, { userId, orgId, now });
-  const byDevice = {};
-  for (const deviceId of deviceIds) byDevice[deviceId] = resolver.permissionsFor(deviceId);
-  return { role: resolver.role, byDevice };
-}
-
 export function can(db, ctx, permission, deviceId = null) {
   return createResolver(db, { userId: ctx.userId, orgId: ctx.orgId }).can(permission, deviceId);
 }
@@ -370,4 +357,3 @@ function assertSessionStartable(decide, mode, role, deviceId) {
   return { role, grantIds, snapshotAt: new Date().toISOString() };
 }
 
-export const __testing = { patternCovers, expand };

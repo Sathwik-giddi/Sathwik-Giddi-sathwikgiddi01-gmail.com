@@ -226,10 +226,17 @@ export function readNonce() {
  * Requires schema.sql + reference.sql to be loaded already (FKs on roles, permissions,
  * permission_patterns, devices).
  */
-export function applyOverlay(db, overlay, { passwordHash, now = new Date() } = {}) {
+export async function applyOverlay(db, overlay, { passwordHash, now = new Date() } = {}) {
   if (!overlay) return false;
   const at = now.toISOString();
   const { role, permission, org, user, bystander, devices, grants, session, audit } = overlay;
+
+  // `hashPassword` is async (scrypt on the threadpool) and `db.transaction` takes a synchronous
+  // function, so the hashes are computed BEFORE the transaction opens. Doing it inside would either
+  // throw or silently write the string "[object Promise]" into password_hash, which fails at the
+  // first sign-in rather than here.
+  const userHash = await passwordHash('demo1234');
+  const bystanderHash = await passwordHash('demo1234');
 
   const write = db.transaction(() => {
     // 1. the undocumented role and permission, plus the pattern row that keeps the
@@ -251,8 +258,8 @@ export function applyOverlay(db, overlay, { passwordHash, now = new Date() } = {
     //    first org, so adding a membership to a documented user would silently
     //    re-scope the shipped API tests.
     const u = db.prepare('INSERT INTO users (id,email,name,password_hash) VALUES (?,?,?,?)');
-    u.run(user.id, user.email.toLowerCase(), user.name, passwordHash('demo1234'));
-    u.run(bystander.id, bystander.email.toLowerCase(), bystander.name, passwordHash('demo1234'));
+    u.run(user.id, user.email.toLowerCase(), user.name, userHash);
+    u.run(bystander.id, bystander.email.toLowerCase(), bystander.name, bystanderHash);
 
     const m = db.prepare('INSERT INTO memberships (id,org_id,user_id,role,status,joined_at) VALUES (?,?,?,?,?,?)');
     m.run(`mem_p_${overlay.slug}_a`, org.id, user.id, role.key, 'active', at);

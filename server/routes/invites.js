@@ -14,7 +14,8 @@
 // does not block a fresh one for the same address — which is right, and is why I did not add an
 // application-level "is there already an invite" check that would have to reproduce that rule.
 
-import { send, notFound, badRequest, conflict, gone, forbidden, unauthenticated } from '../http.js';
+import { send, notFound, badRequest, conflict, gone, forbidden, unauthenticated, tooManyRequests } from '../http.js';
+import { attempt } from '../ratelimit.js';
 import { assertSameOrg, optionalCaller } from '../context.js';
 import { stmt } from '../internal/sql.js';
 import { newId, nowIso } from '../db.js';
@@ -167,6 +168,13 @@ export function register(router) {
   });
 
   router.post('/v1/invites/:token/accept', async (ctx, params, res) => {
+    // Gated before anything else, and with no credential to key on: an invite token is a bearer
+    // credential that has not been spent yet, so there is nothing to count failures against. The
+    // address ceiling in server/ratelimit.js is the whole defence here, which is the right shape —
+    // this endpoint creates accounts, and creating accounts in a loop is the thing to bound.
+    const gate = attempt(ctx.req, null);
+    if (gate.limited) throw tooManyRequests(gate.retryAfter);
+
     const invite = lookupInvite(ctx.db, params.token);
     // Redeeming a spent invite is a CONFLICT with the current state of the resource, not a
     // description of a resource that is gone — which is why this is 409 and the GET above is 410.
@@ -206,7 +214,7 @@ export function register(router) {
         // Re-authenticate against the EXISTING credential. A wrong password is refused exactly as a
         // sign-in would refuse it, and with the same wording, so this endpoint is not a password
         // oracle for addresses that happen to exist.
-        if (password === null || !verifyPassword(password, existingUser.password_hash)) {
+        if (password === null || !(await verifyPassword(password, existingUser.password_hash))) {
           throw unauthenticated('that email already has an account — enter its existing password to join');
         }
         userId = existingUser.id;
@@ -217,7 +225,7 @@ export function register(router) {
       // resolve to one user and one membership rather than two half-created accounts.
       try {
         userId = newId('usr');
-        stmt(ctx.db, 'insertUser').run(userId, invite.email, name, hashPassword(password));
+        stmt(ctx.db, 'insertUser').run(userId, invite.email, name, await hashPassword(password));
       } catch (err) {
         // Someone else created this address between the lookup and the insert. Re-read the invite:
         // if it is spent, that is what actually happened, and saying so is more use than reporting

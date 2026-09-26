@@ -50,7 +50,21 @@ async function call(method, path, { token, body, headers = {} } = {}) {
     const text = await res.text();
     let json = null;
     try { json = text ? JSON.parse(text) : null; } catch { /* not json */ }
-    return { status: res.status, body: json, code: json?.error?.code ?? null, reason: json?.error?.reason ?? null, message: json?.error?.message ?? null };
+    // The header fields are flattened onto the result because the assertions below are about
+    // headers, and threading `res.headers` through every call site would obscure the shape. Named
+    // after the header so the assertion reads as the property it is.
+    const H = (n) => res.headers.get(n);
+    return {
+      status: res.status, body: json,
+      code: json?.error?.code ?? null, reason: json?.error?.reason ?? null, message: json?.error?.message ?? null,
+      retryAfter: H('retry-after'),
+      csp: H('content-security-policy'),
+      nosniff: H('x-content-type-options'),
+      frame: H('x-frame-options'),
+      referrer: H('referrer-policy'),
+      permissions: H('permissions-policy'),
+      cacheControl: H('cache-control'),
+    };
   } catch (err) {
     return { status: 0, body: null, code: 'NETWORK', reason: null, message: err.message };
   }
@@ -538,6 +552,85 @@ console.log('\n== a forged role claim must not outrank the membership row ==');
     token: forge({ org: 'org_globex', role: 'owner' }),
   });
   check('claiming an org the subject is not in -> 401', foreign.status, 401);
+}
+
+// ---------------------------------------------------------------------------
+// Found by scripts/audit.js, not by the specification. Kept here so the shipped suite fails if any
+// of them ever comes back, and each block was verified by reverting the fix and watching it go red.
+console.log('\n== every response carries a security header set ==');
+{
+  // Found by reading the response headers off a running server: there was no CSP, no nosniff, no
+  // frame options, no referrer policy and no permissions policy on anything.
+  const res = await call('GET', '/v1/orgs/org_acme/devices', { token: await into('admin@acme.test', 'org_acme') });
+  const csp = res.csp ?? '';
+  // The header NAME matters and is not cosmetic: `X-Content-Security-Policy` was a draft no browser
+  // implemented, so a policy sent under it is inert while looking correct in a header dump. The
+  // first version of server/headers.js used the prefixed name and this is the assertion that caught
+  // it — a CSP that was present, unrecognised, and protecting nothing.
+  check('Content-Security-Policy, not the inert X- prefixed draft', csp.length > 0, true);
+  check("default-src 'self'", /default-src 'self'/.test(csp), true);
+  check("object-src 'none'", /object-src 'none'/.test(csp), true);
+  check("base-uri pinned", /base-uri 'self'/.test(csp), true);
+  check("no 'unsafe-eval'", csp.includes('unsafe-eval'), false);
+  check('X-Content-Type-Options: nosniff', res.nosniff, 'nosniff');
+  check('X-Frame-Options is set', res.frame, 'SAMEORIGIN');
+  check('Referrer-Policy is set', res.referrer, 'no-referrer');
+  check('Permissions-Policy denies the camera', (res.permissions ?? '').includes('camera=()'), true);
+  check('an API response is not cacheable', res.cacheControl, 'no-store');
+
+  // The document and the hashed bundle are different resources with different caching rules.
+  // `call` prefixes BASE with /v1, so the SPA document needs the server root addressed directly.
+  const doc = await (async () => {
+    const r = await fetch(`http://localhost:${PORT}/`);
+    await r.text();
+    return { status: r.status, cacheControl: r.headers.get('cache-control'), nosniff: r.headers.get('x-content-type-options') };
+  })();
+  check('the SPA document is revalidated rather than pinned', [doc.status, doc.cacheControl], [200, 'no-cache']);
+  check('and it carries the same header set', doc.nosniff, 'nosniff');
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n== an unauthenticated endpoint cannot be used as a lever ==');
+{
+  // Two findings, one cause. `scryptSync` blocked the event loop, so a burst of logins stalled
+  // every other request; and there was no limit on how many a burst could contain.
+  //
+  // A dedicated address is used so the counter this fills cannot affect any other assertion in this
+  // file, and the production default is 5 failures inside a 60s window.
+  const victim = 'hardening-ratelimit@example.test';
+  const codes = [];
+  for (let i = 0; i < 7; i++) {
+    codes.push((await call('POST', '/auth/login', { body: { email: victim, password: 'wrong' } })).status);
+  }
+  check('repeated failures for one credential are throttled', codes[6], 429);
+  check('the attempts before the limit are ordinary 401s', codes.slice(0, 3), [401, 401, 401]);
+  const throttled = await call('POST', '/auth/login', { body: { email: victim, password: 'wrong' } });
+  check('the 429 advertises Retry-After', throttled.retryAfter !== null && Number(throttled.retryAfter) > 0, true);
+  check('the 429 says nothing about whether the account exists', throttled.message, 'too many attempts; try again shortly');
+
+  // The property that makes this design usable at all, and the reason the shipped suite — which
+  // signs in around fifty times — still passes: throttling is per credential, and a correct
+  // password is never counted.
+  const unaffected = await call('POST', '/auth/login', { body: { email: 'sam@example.test', password: 'demo1234' } });
+  check('a different credential is unaffected', unaffected.status, 200);
+  const own = await call('POST', '/auth/login', { body: { email: 'dana@example.test', password: 'demo1234' } });
+  check('and a correct password is never throttled however often it is used', own.status, 200);
+
+  // The KDF must not run on the event loop. Measured, not asserted: 32 concurrent verifications
+  // against a 5ms timer. With a synchronous KDF the timer does not fire once.
+  const { verifyPassword, hashPassword } = await import('../server/auth.js');
+  const stored = await hashPassword('demo1234');
+  let ticks = 0, running = true;
+  const beat = () => { ticks++; if (running) setTimeout(beat, 5); };
+  setTimeout(beat, 5);
+  const t0 = Date.now();
+  await Promise.all(Array.from({ length: 32 }, () => verifyPassword('demo1234', stored)));
+  const elapsed = Date.now() - t0;
+  running = false;
+  const starvation = 1 - ticks / Math.ceil(elapsed / 5);
+  console.log(`         32 concurrent verifications: ${elapsed}ms, timer fired ${ticks}/${Math.ceil(elapsed / 5)}x`);
+  check('the work really happened (not a vacuously fast probe)', elapsed > 100, true);
+  check('the event loop is not starved by password hashing', starvation < 0.35, true);
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);

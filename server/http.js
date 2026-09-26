@@ -5,6 +5,8 @@
 // Keep it identical everywhere. The "doesn't exist" and "belongs to another org"
 // responses must be indistinguishable — see PERMISSIONS.md §6.
 
+import { apiHeaders } from './headers.js';
+
 export class HttpError extends Error {
   constructor(status, code, message, reason = null) {
     super(message);
@@ -18,6 +20,13 @@ export const badRequest = (msg, reason = null) => new HttpError(400, 'VALIDATION
 export const unauthenticated = (msg = 'not authenticated') => new HttpError(401, 'UNAUTHENTICATED', msg);
 export const tokenStale = () => new HttpError(401, 'TOKEN_STALE', 'token is stale; refresh and retry');
 export const forbidden = (msg = 'forbidden', reason = 'missing_permission') => new HttpError(403, 'FORBIDDEN', msg, reason);
+export const tooManyRequests = (retryAfterSeconds) => {
+  const err = new HttpError(429, 'RATE_LIMITED', 'too many attempts; try again shortly', 'rate_limited');
+  // Surfaced as a response header by `sendError`, so a client can back off correctly instead of
+  // guessing. The number comes from the limiter's own window arithmetic, not from this layer.
+  err.retryAfter = retryAfterSeconds;
+  return err;
+};
 export const selfRoleChange = () => new HttpError(403, 'SELF_ROLE_CHANGE', 'you cannot change your own role');
 export const notFound = (msg = 'not found') => new HttpError(404, 'NOT_FOUND', msg);
 export const conflict = (msg, code = 'CONFLICT') => new HttpError(409, code, msg);
@@ -44,7 +53,7 @@ export function send(res, status, body) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'content-length': Buffer.byteLength(payload),
-    'cache-control': 'no-store',
+    ...apiHeaders(),
   });
   res.end(payload);
 }
@@ -56,6 +65,8 @@ export function sendError(res, err, requestId) {
   // Never leak internals, and never echo request bodies — they can contain
   // stream keys and invite tokens.
   const message = err instanceof HttpError ? err.message : 'internal error';
+
+  if (err?.retryAfter) res.setHeader('retry-after', String(err.retryAfter));
 
   if (!(err instanceof HttpError)) {
     console.error(`[${requestId}] unhandled:`, err);

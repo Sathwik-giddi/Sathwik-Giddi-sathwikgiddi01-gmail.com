@@ -26,7 +26,11 @@ if (!overlay) {
 const db = openDatabase(':memory:');
 db.exec(readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8'));
 db.exec(readFileSync(new URL('../db/reference.sql', import.meta.url), 'utf8'));
-applyOverlay(db, overlay, { passwordHash: () => 'x' });
+// Awaited: `applyOverlay` is async because it hashes a password on the threadpool before opening
+// its transaction. Un-awaited it returned a promise and every assertion below ran against a
+// database the overlay had not been written to yet — which failed in a way that looked like four
+// unrelated permission bugs.
+await applyOverlay(db, overlay, { passwordHash: () => 'x' });
 
 let pass = 0, fail = 0;
 const check = (label, actual, expected) => {

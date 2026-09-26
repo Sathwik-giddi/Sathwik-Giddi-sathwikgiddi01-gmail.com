@@ -28,6 +28,29 @@ export function audit(db, { orgId, actorId = null, action, targetType = null, ta
   if (!orgId) throw new Error('audit: orgId is required — audit_events.org_id is NOT NULL');
   if (result !== 'allow' && result !== 'deny') throw new Error(`audit: result must be allow|deny, got ${result}`);
 
+  // The table below is the single source of truth for which actions exist and what they act on.
+  //
+  // It used to be a comment's worth of good intentions: declared, frozen, documented as "stated
+  // once, because the alternative is deciding per route and drifting" — and read by nothing. Every
+  // route passed its own `targetType` inline, so the map could disagree with every caller and no
+  // test would notice. A map that is not consulted cannot prevent drift; it only records it.
+  //
+  // So it is consulted. An action that is not in the table is a programming error and throws here
+  // rather than producing an audit row nobody can classify. In development the check is relaxed to a
+  // warning, because a new route should not be blocked from starting by a missing table entry.
+  const known = AUDITED_ACTIONS[action];
+  if (!known) {
+    const msg = `audit: action ${JSON.stringify(action)} is not in AUDITED_ACTIONS`;
+    if (process.env.NODE_ENV === 'production') throw new Error(msg);
+    console.warn(`[audit] ${msg}`);
+  } else if (targetType && known.targetType !== targetType) {
+    // A mismatch is worse than a missing entry: the row would be filed under the wrong subject, and
+    // a reader filtering audit_events by target_type would silently miss it.
+    const msg = `audit: action ${JSON.stringify(action)} acts on ${known.targetType}, not ${targetType}`;
+    if (process.env.NODE_ENV === 'production') throw new Error(msg);
+    console.warn(`[audit] ${msg}`);
+  }
+
   return stmt(db, 'insertAudit').run(
     newId('aud'),
     orgId,
@@ -93,14 +116,17 @@ export function auditSuccess(db, ctx, meta) {
 
 /**
  * What counts as an auditable event. Stated once, because the alternative is deciding per route
- * and drifting:
+ * and drifting — and this table is now actually consulted by `audit()`, so a route that invents an
+ * action is refused rather than quietly recorded:
  *
  *   - anything that CHANGES authorization state: role, status, membership, grants, devices,
  *     org settings, invites, sessions
  *   - any REFUSAL of one of those (via auditDenials)
- *   - reads are not audited. `audit:read` on a hot list endpoint would make the table grow with
- *     traffic rather than with decisions, and the schema's append-only triggers mean there is no
- *     way to prune it afterwards.
+ *   - a REFUSED read. Reads are not audited on success — `audit:read` on a hot list endpoint would
+ *     make the table grow with traffic rather than with decisions, and the schema's append-only
+ *     triggers mean there is no way to prune it afterwards. But a read that was REFUSED is an
+ *     authorization event like any other, so those are recorded. That is why the read actions below
+ *     exist and why they only ever appear with `result = 'deny'`.
  */
 export const AUDITED_ACTIONS = Object.freeze({
   'org.create': { targetType: 'org' },
@@ -123,4 +149,22 @@ export const AUDITED_ACTIONS = Object.freeze({
   'session.start': { targetType: 'device' },
   'session.stop': { targetType: 'session' },
   'session.terminate': { targetType: 'session' },
+
+  // Reads. Recorded only on refusal — see the note above. `targetType` is the subject the refusal
+  // was about, which for a collection is the org and for a single row is the row.
+  'device.list': { targetType: 'org' },
+  'device.read': { targetType: 'device' },
+  'grant.read': { targetType: 'org' },
+  'invite.read': { targetType: 'org' },
+  'member.read': { targetType: 'org' },
+  'user.effective.read': { targetType: 'user' },
+  'session.read': { targetType: 'org' },
+  'session.read.one': { targetType: 'session' },
+
+  // The one READ that is audited on success as well as on refusal, and it was missing from this
+  // table until the table started being read. `GET /v1/orgs/:org/audit` records itself, because
+  // reading the audit log is the one read that answers "who has been watching" — and an audit trail
+  // nobody can ask that question of is not much of a trail. It is one row per page view, not per
+  // row returned, so it still does not grow with traffic.
+  'audit.read': { targetType: 'org' },
 });

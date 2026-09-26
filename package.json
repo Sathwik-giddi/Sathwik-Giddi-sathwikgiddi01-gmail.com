@@ -15,6 +15,7 @@
     "test:ui": "playwright test --ui",
     "check": "node scripts/check-jwt.js && node scripts/check-permissions.js && node scripts/check-personalisation.js && node scripts/check-api.js && node scripts/check-seams.js && node scripts/check-hardening.js && node scripts/check-http-seams.js",
     "pentest": "node scripts/pentest.js",
+    "audit": "node scripts/audit.js",
     "personalisation": "node scripts/check-personalisation.js",
     "fingerprint": "node scripts/personalise.js",
     "measure": "node scripts/measure.js",

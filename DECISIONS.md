@@ -573,6 +573,97 @@ because the instinct on seeing a stack trace is to assume the harness is broken 
 the thing under test is missing.
 
 
+### Throttle failures, not requests, and count them per credential
+
+**What I chose:** `server/ratelimit.js` throttles *consecutive failures for one credential from one
+address*, with a looser per-address ceiling on total attempts. A correct password clears the
+counter. Limits are 5 failures per 60s and 300 attempts per address per minute, both env-overridable.
+
+**Why:** the obvious implementation is wrong here for a measured reason. The shipped suites sign in
+about fifty times from 127.0.0.1, so any per-IP ceiling low enough to matter breaks `npm run check`;
+and any ceiling that does not break them — several hundred a minute — stops nothing, because one
+login costs about 40ms of scrypt and 300 of them is twelve seconds of threadpool time.
+
+Counting failures is both the correct security property and the reason the test suite still passes.
+A person who types their password correctly is never throttled however often they sign in.
+Credential stuffing fails every time, so it is the thing that gets slowed.
+
+**What I rejected:** a global per-IP request cap, as above. Also a lockout that persists — an
+attacker who learns five wrong passwords for a victim can lock that account out indefinitely, which
+converts a rate limiter into a denial-of-service tool pointed at a third party. The window slides
+and a success clears it, so the worst outcome is a slow attacker, not a permanently unavailable
+account.
+
+**What would change my mind:** a shared store. Across more than one instance, in-process counters
+mean an attacker gets the limit per instance, and the honest answer is Redis or the database. I did
+not add a dependency to solve a problem a single-process deployment does not have, but I would not
+ship this horizontally scaled without one.
+
+One detail that is easy to skip: the counter map is **pruned**, because its keys are attacker-
+controlled. Every distinct address/credential pair is a key, so a script sending ten thousand unique
+emails grows the map by ten thousand entries and turns a rate limiter into a memory-exhaustion
+vector. Pruning runs at most once per window, so the cost is amortised against the traffic that
+caused it.
+
+### A security header is not a security control until a browser agrees to it
+
+**What I chose:** `server/headers.js` owns one header set, applied where a response is created. The
+CSP is environment-dependent: production gets `script-src 'self'; style-src 'self';` with no inline
+and no eval; only dev gets `'unsafe-inline'`, for Vite's inline module preamble.
+
+**Why:** it went through three wrong versions before that, and the reason each was wrong is the
+point. First, `X-Content-Security-Policy` — an abandoned draft no browser implements, so the policy
+was inert while every other header was present and all 34 UI tests passed. Second,
+`script-src 'self' 'unsafe-inline'`, added for the dev client: `'unsafe-inline'` permits inline
+script, which is the one thing a CSP exists to stop, and a browser test that injects an inline
+script found it **executing**. Third, a policy assembled from bare source expressions that read
+`… font-src 'self'; 'self'; 'self'; connect-src 'self'` — two nameless directives Chrome discards,
+with blocking accidentally working via the `default-src` fallback.
+
+**What I rejected:** one policy for both environments. The permissive form has to exist for Vite, and
+shipping it to production because dev needs it trades a real control for developer convenience.
+
+**What would change my mind:** a build that genuinely needs an inline script. Then the answer is a
+per-response nonce or a hash of the one inline script, not a global `'unsafe-inline'`.
+
+The lesson I would keep: **every one of those three passed the test suite.** A header-presence
+assertion cannot distinguish a policy the browser enforces from a policy the browser ignores,
+because in both cases the header is there. Only a browser can tell you, so
+`tests/csp.spec.js` serves the real document with an injected script and asks Chrome whether it ran.
+It also signs in afterwards, because a policy that blocks the app's own bundle is an outage wearing
+the costume of a security control.
+
+### A declaration that nothing reads is documentation, not a constraint
+
+**What I chose:** `audit()` now consults `AUDITED_ACTIONS` and throws in production on an undeclared
+action or a `targetType` mismatch. The audit asserts the table and the routes agree, in both
+directions, from source.
+
+**Why:** a dead-code sweep found `AUDITED_ACTIONS` declared, frozen, and documented as *"stated once,
+because the alternative is deciding per route and drifting"* — read by nothing. Every route passed
+its own `targetType` inline, so the table could disagree with every caller indefinitely and nothing
+would notice. A table that is not consulted cannot prevent drift; it can only record it, and this one
+was not even recording correctly.
+
+Consulting it failed a test on the first run. `audit.read` was being emitted by the audit-log route
+and was not in the table. Static analysis then found eight more undeclared read actions, and revealed
+that `audit.js`'s own header comment was wrong: it said "reads are not audited", while reads *are*
+audited on refusal, because a refusal is an authorization event like any other. Successes are not
+audited; refusals are. The comment now says exactly that.
+
+**What I rejected:** deleting the table as dead code. It was the better-kept artefact — the intent was
+right and only the wiring was missing — and deleting it would have discarded the one place that knew
+which actions exist.
+
+**What would change my mind:** if the action set were genuinely open-ended — a caller-supplied action
+name, say — a fixed table would be the wrong shape. Nothing here is.
+
+The check that came out of it is written to fail loudly on the *shape* of the problem: the audit
+scrapes every dotted literal in the route files rather than a regex shaped like `action: '…'`,
+because three of the twenty-nine actions are produced by a ternary assigned to a local, and a
+literal-shaped regex reported them as "declared but never emitted". A check that cries wolf gets
+ignored, which is the same failure as one that cries wolf in the other direction.
+
 ## Deliberately not built
 
 Stated now for the things already decided; this section grows as the build does.
@@ -613,6 +704,12 @@ Stated now for the things already decided; this section grows as the build does.
   `device:reboot` is unexercised.
 - **Rate limiting and a login attempt counter.** Sign-in is already 34.3 ms p50 and all of it is
   the given `scryptSync`, so the hash is the floor; both are listed as out of scope anyway.
+  **Superseded in Phase 11** — this was the reasoning that left an unauthenticated endpoint able to
+  stall the whole server, and it was wrong in an instructive way. "The hash is the floor" treated
+  the KDF cost as a fixed price rather than as work that queues behind itself on one thread. Both
+  halves are now built: the hash runs on the threadpool, and the failures are throttled. The entry is
+  left in place because the error is the useful part — an expensive operation reachable without a
+  credential is a lever, whatever its per-call cost.
 - **Bulk member and grant operations.** Creating fifty people is fifty requests. The engine and the
   endpoints are per-item by specification, and a bulk endpoint is a new authorisation surface rather
   than a convenience.

@@ -14,6 +14,7 @@ import { createRouter } from './router.js';
 import { openDatabase } from './db.js';
 import { send, sendError, readJson, notFound } from './http.js';
 import { authenticate } from './context.js';
+import { headersFor } from './headers.js';
 import { registerRoutes } from './routes/index.js';
 
 const DEV = process.env.NODE_ENV !== 'production';
@@ -143,6 +144,7 @@ async function serveStatic(req, res, url) {
     res.writeHead(200, {
       'content-type': MIME[extname(file)] ?? 'application/octet-stream',
       'content-length': body.length,
+      ...headersFor(url.pathname),
     });
     res.end(body);
   } catch {
