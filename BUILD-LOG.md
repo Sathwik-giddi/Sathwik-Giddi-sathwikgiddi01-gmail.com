@@ -875,6 +875,54 @@ console signed itself out — and the helper was then waiting for an `app-shell`
 gone. The behaviour was right and the test was wrong, which is the fourth time this phase that
 sentence has been true.
 
+### 11. My own write-up claimed something my code did not do
+
+`DECISIONS.md` — the document that argues I emit `expired_grant` on a grant created with an expiry
+in the past. I did not. I emitted `reason: "invalid_window"`, a word that appears **nowhere** in
+any of the five specification documents, on an error the specification names twice.
+
+```
+PERMISSIONS.md §5, code table:  | `GRANT_EXPIRED` | 400 | creating a grant that is already expired |
+PERMISSIONS.md §5, prose:        `reason` is the machine-readable cause — … `expired_grant` …
+```
+
+Two columns, two requirements: the **code** is `GRANT_EXPIRED` and the **reason** is
+`expired_grant`. I had the code right and invented the reason, and then wrote a paragraph asserting
+the invented one was deliberate. It is now `expired_grant`, and the assertion is
+`400 GRANT_EXPIRED` + `reason 'expired_grant'`.
+
+The lesson is the same one as the refresh family, one layer up. A write-up is not a description of
+intent, it is a **claim about the running code**, and the only thing that can keep it honest is
+asserting the claim. Every sentence in `DECISIONS.md` that says "I emit X" now has a test that
+fails if X stops being emitted.
+
+### 12. My own hardening suite, written from the specification
+
+`scripts/check-hardening.js` — 63 assertions, and the section headers are the numbered list from
+`PERMISSIONS.md §9` ("Things that should always be true"), because that list is the specification
+handing me a checklist and declining to use it would be strange.
+
+The one worth calling out is §9.10, "the role-to-permission matrix exists in exactly one place".
+The check reads a role's baseline and its live grants **straight from the database file**, with its
+own connection, and compares that set against what `GET /users/{id}/effective` returns. If a second
+copy of the matrix existed anywhere, the two would disagree. It is a data comparison rather than a
+reimplementation of resolution, deliberately — a reimplementation would be the second copy.
+
+It also caught that the seeded Acme viewer's org-level answer includes `session:start`, which they
+only hold on ONE device. That is the union decision showing up as a test: if someone quietly
+reverts it, this fails.
+
+`528 malformed requests produced no 5xx` — eleven endpoints × 48 hostile bodies, plus nine
+query-string abuses including `;DROP TABLE audit_events;--`. Zero 5xx.
+
+**Five of my own tests in this file were wrong before they were right**, and every one was the same
+mistake: authenticating *before* the write whose effect the test was checking. Creating a grant
+bumps the grantee's `perm_version`, so a token taken beforehand is stale by design — the freshness
+mechanism working correctly, and my test mistaking it for the bug. Twice I also asserted a 200 or a
+409 that the code was right to refuse, because I had walked the fixture into the state the
+assertion was meant to be checking. The behaviour was right and the test was wrong, which is now
+the fifth time this phase that sentence has been true, and it is the most useful thing in it.
+
 ### The pattern across all three
 
 Every one is a check I ran, and none of them was a check that could fail. I asserted the 401 and

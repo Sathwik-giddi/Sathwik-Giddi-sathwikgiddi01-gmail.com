@@ -273,10 +273,19 @@ export function register(router) {
       const startsAt = normalizeTs(ctx.body.startsAt, 'startsAt');
       const expiresAt = normalizeTs(ctx.body.expiresAt, 'expiresAt');
       if (expiresAt !== null && new Date(expiresAt).getTime() <= Date.now()) {
-        // `GRANT_EXPIRED` is a CODE in the documented table (PERMISSIONS.md §5), not a reason, and
-        // `badRequest()` only sets `reason`. So the error is built directly: the code matches the
-        // table, and the reason still carries a machine-readable cause like every other 400.
-        throw new HttpError(400, 'GRANT_EXPIRED', 'expiresAt is in the past', 'invalid_window');
+        // `GRANT_EXPIRED` appears in BOTH columns of the spec and they want different things.
+        //
+        //   PERMISSIONS.md §5, code table:  "| `GRANT_EXPIRED` | 400 | creating a grant that is
+        //                                        already expired |"
+        //   PERMISSIONS.md §5, prose:        "`reason` is the machine-readable cause —
+        //                                        `missing_permission`, `explicit_deny`,
+        //                                        `suspended`, `expired_grant`, `scope_mismatch`"
+        //
+        // So the CODE is `GRANT_EXPIRED` and the REASON is `expired_grant`, and I was emitting
+        // `invalid_window` for the reason — a word that appears nowhere in the specification, on an
+        // error the specification names twice. My own DECISIONS.md even claimed I emitted
+        // `expired_grant`. Both are now what the documents say.
+        throw new HttpError(400, 'GRANT_EXPIRED', 'expiresAt is in the past', 'expired_grant');
       }
       if (startsAt !== null && expiresAt !== null && expiresAt <= startsAt) {
         throw badRequest('expiresAt must be after startsAt', 'invalid_window');

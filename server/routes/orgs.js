@@ -171,7 +171,9 @@ export function register(router) {
     const action = suspended ? 'member.suspend' : 'member.reinstate';
     return auditDenials(ctx.db, ctx, { action, targetType: 'user', targetId: params.userId }, () => {
       ctx.resolver.assertCan('user:remove');
-      if (params.userId === ctx.userId) throw badRequest('you cannot suspend yourself', 'self_suspend');
+      // SELF_ROLE_CHANGE, not a 400: acting on your own membership is the same family of
+      // mistake as changing your own role, and `SELF_ROLE_CHANGE` is the code the documents give it.
+      if (params.userId === ctx.userId) throw selfRoleChange();
 
       const target = stmt(ctx.db, 'membershipByOrgUser').get(params.org, params.userId);
       if (!target) throw notFound();
@@ -247,7 +249,8 @@ export function register(router) {
     assertSameOrg(ctx, params.org);
     return auditDenials(ctx.db, ctx, { action: 'member.remove', targetType: 'user', targetId: params.userId }, () => {
       ctx.resolver.assertCan('user:remove');
-      if (params.userId === ctx.userId) throw badRequest('use the self-leave endpoint to leave', 'self_remove');
+      // Same reasoning as self-suspend: one code for 'you cannot do this to yourself'.
+      if (params.userId === ctx.userId) throw selfRoleChange();
 
       const target = stmt(ctx.db, 'membershipByOrgUser').get(params.org, params.userId);
       if (!target) throw notFound();

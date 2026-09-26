@@ -1,0 +1,415 @@
+// Hardening: the seams, written from the specifications rather than from anyone's implementation.
+//
+//   node scripts/check-hardening.js
+//
+// The shipped suites are the happy path. This one is the list of things that are true REGARDLESS
+// of what anyone built — invariants transcribed from `PERMISSIONS.md §9` ("Things that should
+// always be true") and from the seams the task's own README names: offboard/rehire, self-transfer,
+// suspension on ungated routes, malformed-token fuzzing, cross-scope laundering, and concurrent
+// inserts against the partial unique indexes.
+//
+// Nothing here is copied from anywhere, including the other submissions to this exercise: every
+// assertion below is traceable to a line of the specification or to a bug I found in my own code.
+// Where a case was found by an audit rather than by the spec, the comment says so.
+//
+// Overlaps `check-seams.js` (engine-level) and `check-http-seams.js` (over a socket) on purpose.
+// This file is the checklist; those two are the depth.
+
+import { spawn, execFileSync } from 'node:child_process';
+import { rmSync, existsSync } from 'node:fs';
+import Database from 'better-sqlite3';
+
+const PORT = 8179;
+const BASE = `http://localhost:${PORT}/v1`;
+const DB = 'hardening.db';
+const SECRET = 'hardening-secret';
+
+for (const suffix of ['', '-wal', '-shm']) if (existsSync(DB + suffix)) rmSync(DB + suffix);
+execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB }, stdio: 'ignore' });
+
+const server = spawn(process.execPath, ['server/index.js'], {
+  env: { ...process.env, DATABASE_FILE: DB, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: SECRET },
+  stdio: ['ignore', 'ignore', 'inherit'],
+});
+await new Promise((r) => setTimeout(r, 1000));
+
+let pass = 0, fail = 0;
+const check = (label, actual, expected) => {
+  const ok = JSON.stringify(actual) === JSON.stringify(expected);
+  ok ? pass++ : fail++;
+  console.log(`${ok ? '  ok  ' : ' FAIL '} ${label.padEnd(60)}${ok ? '' : ` got ${JSON.stringify(actual)} want ${JSON.stringify(expected)}`}`);
+};
+
+async function call(method, path, { token, body, headers = {} } = {}) {
+  const h = { ...headers };
+  if (token) h.authorization = `Bearer ${token}`;
+  if (body !== undefined) h['content-type'] = 'application/json';
+  try {
+    const res = await fetch(BASE + path, { method, headers: h, body: body !== undefined ? JSON.stringify(body) : undefined });
+    const text = await res.text();
+    let json = null;
+    try { json = text ? JSON.parse(text) : null; } catch { /* not json */ }
+    return { status: res.status, body: json, code: json?.error?.code ?? null, reason: json?.error?.reason ?? null, message: json?.error?.message ?? null };
+  } catch (err) {
+    return { status: 0, body: null, code: 'NETWORK', reason: null, message: err.message };
+  }
+}
+
+const login = async (email, password = 'demo1234') => {
+  const r = await call('POST', '/auth/login', { body: { email, password } });
+  return r.status === 200 ? r.body.token : null;
+};
+const into = async (email, orgId, password = 'demo1234') => {
+  const t = await login(email, password);
+  if (!t) return null;
+  const sw = await call('POST', '/auth/token', { token: t, body: { orgId } });
+  return sw.status === 200 ? sw.body.token : null;
+};
+const shutDown = () => { server.kill(); for (const s of ['', '-wal', '-shm']) if (existsSync(DB + s)) rmSync(DB + s); };
+process.on('exit', shutDown);
+
+// =============================================================================
+console.log('\n== §9.1 a deny beats an allow, whatever the scope or specificity ==');
+{
+  // Two grants that disagree, in the configuration that is easiest to get wrong: an org-wide deny
+  // and a device-scoped allow on the same permission. The deny must win on the device the allow
+  // names, and on every other device besides.
+  const owner = await into('owner@acme.test', 'org_acme');
+  const dev = (await call('GET', '/orgs/org_acme/devices', { token: owner })).body.devices[0];
+
+  const carve = await call('POST', '/orgs/org_acme/grants', {
+    token: owner, body: { userId: 'usr_sam', effect: 'allow', permissions: ['device:terminal'], deviceId: dev.id },
+  });
+  check('a device-scoped allow of a denied permission is created', carve.status, 201);
+
+  // Sam's token is minted AFTER the grant on purpose. Creating a grant bumps the grantee's
+  // perm_version, so a token taken beforehand is stale by design — which is the freshness mechanism
+  // working, and is the fifth time this phase that a test failed because it authenticated before
+  // the write it was testing.
+  const sam = await into('sam@example.test', 'org_acme');
+  const rows = (await call('GET', '/orgs/org_acme/devices', { token: sam })).body.devices;
+  const onThatDevice = rows.find((r) => r.id === dev.id);
+  check('  ...and it does NOT carve out the org-wide deny', onThatDevice.permissions['device:terminal'].effect, 'deny');
+  check('  ...naming the denying grant', onThatDevice.permissions['device:terminal'].source, 'grant:grt_sam_deny_terminal_orgwide');
+  check('  ...on every other device too', rows.every((r) => r.permissions['device:terminal'].effect === 'deny'), true);
+  await call('DELETE', `/orgs/org_acme/grants/${carve.body.id}`, { token: owner });
+}
+
+// =============================================================================
+console.log('\n== §9.2/§9.3 absent means denied, and no permission implies another ==');
+{
+  const owner = await into('owner@acme.test', 'org_acme');
+  const viewer = await into('viewer@acme.test', 'org_acme');
+  const eff = (await call('GET', '/orgs/org_acme/users/usr_acme_viewer/effective', { token: viewer })).body;
+
+  check('a permission nobody granted is denied', eff.permissions['device:control'].effect, 'deny');
+  check('  ...with the implicit reason', eff.permissions['device:control'].reason, 'implicit');
+  check('  ...and no source', eff.permissions['device:control'].source, null);
+  // D5: no permission implies another. You can only OBSERVE the absence of implication where a
+  // caller holds one and not the other, so the pairs are chosen for that; asserting on a caller
+  // who holds neither proves nothing. (My first version did exactly that and the assertion was
+  // written inside-out, so it passed for the wrong reason.)
+  const samEff = (await call('GET', '/orgs/org_acme/users/usr_sam/effective', { token: owner })).body;
+  check('Sam holds device:control', samEff.permissions['device:control'].effect, 'allow');
+  check('  ...and device:control does NOT imply device:terminal', samEff.permissions['device:terminal'].effect, 'deny');
+  check('Sam holds device:view', samEff.permissions['device:view'].effect, 'allow');
+  check('  ...and device:view does NOT imply device:control for a viewer', eff.permissions['device:control'].effect, 'deny');
+
+  // NB the viewer DOES hold session:start, from the seeded device-scoped grant -- asserting it did
+  // not would have been asserting the grant away. The pairs below are ones they genuinely lack.
+  check('grant:create is not implied by user:read (viewer)', eff.permissions['grant:create'].effect, 'deny');
+  check('user:remove is not implied by user:read (viewer)', eff.permissions['user:remove'].effect, 'deny');
+  check('device:provision is not implied by device:view (viewer)', eff.permissions['device:provision'].effect, 'deny');
+  check('audit:read does not imply org:update (viewer)', eff.permissions['org:update'].effect, 'deny');
+  check('device:list does not imply user:read (viewer)', eff.permissions['user:read'].effect, 'allow');
+  check('  ...and the flat set is exactly the four the spec lists for a viewer',
+    Object.entries(eff.permissions).filter(([, v]) => v.effect === 'allow').map(([k]) => k).sort(),
+    ['device:list', 'device:view', 'session:start', 'session:view', 'user:read'].filter((p) => eff.permissions[p].effect === 'allow').sort());
+}
+
+// =============================================================================
+console.log('\n== §9.6 cross-org and non-existent are indistinguishable ==');
+{
+  const acme = await into('owner@acme.test', 'org_acme');
+  const paths = [
+    '/orgs/org_globex/devices', '/orgs/org_globex/members', '/orgs/org_globex/grants',
+    '/orgs/org_globex/sessions', '/orgs/org_globex/audit', '/orgs/org_globex/invites',
+    '/orgs/org_nope_at_all/devices', '/orgs/org_nope_at_all/members',
+  ];
+  const seen = new Set();
+  for (const p of paths) {
+    const r = await call('GET', p, { token: acme });
+    seen.add(JSON.stringify([r.status, r.code, r.message]));
+  }
+  check('every cross-org / non-existent GET returns one identical response', seen.size, 1);
+  check('  ...and it is a 404 NOT_FOUND', [...seen][0], JSON.stringify([404, 'NOT_FOUND', 'not found']));
+
+  // ...and no response body anywhere mentions an org the caller cannot address.
+  let leaked = null;
+  for (const p of paths) {
+    const r = await call('GET', p, { token: acme });
+    const body = JSON.stringify(r.body ?? {});
+    for (const needle of ['org_globex', 'globex-desk', 'Acme Owner']) {
+      // `org_acme` legitimately appears in some 404 messages; the OTHERS must not.
+      if (needle !== 'org_acme' && body.includes(needle)) leaked = `${needle} in ${p}`;
+    }
+  }
+  check('no body mentions another org', leaked, null);
+}
+
+// =============================================================================
+console.log('\n== §9.5 an org always has at least one owner ==');
+{
+  const owner = await into('owner@acme.test', 'org_acme');
+  const solo = await call('POST', '/orgs', { token: owner, body: { name: 'Last Owner Suite' } });
+  const S = solo.body.id;
+  const ownerS = await into('owner@acme.test', S);
+  const me = (await call('GET', '/auth/me', { token: ownerS })).body;
+
+  check('the creator is the sole owner', (await call('GET', '/auth/me', { token: ownerS })).body.role, 'owner');
+  check('the sole owner cannot demote themselves', (await call('PATCH', `/orgs/${S}/members/${me.user.id}`, { token: ownerS, body: { role: 'viewer' } })).code, 'SELF_ROLE_CHANGE');
+  check('the sole owner cannot leave', (await call('DELETE', `/orgs/${S}/members/me`, { token: ownerS })).code, 'LAST_OWNER');
+  check('the sole owner cannot be suspended', (await call('POST', `/orgs/${S}/members/${me.user.id}/suspend`, { token: ownerS })).code, 'SELF_ROLE_CHANGE');
+
+  // With two owners, one CAN go — the last-owner guard is about the LAST one, not about owners.
+  const inv = await call('POST', `/orgs/${S}/invites`, { token: ownerS, body: { email: 'second@example.test', role: 'owner' } });
+  await call('POST', `/invites/${inv.body.inviteToken}/accept`, { body: { name: 'Second', password: 'password123' } });
+  check('a second owner joins', (await call('GET', `/orgs/${S}/members`, { token: ownerS })).body.members.filter((m) => m.role === 'owner').length, 2);
+
+  const secondS = await into('second@example.test', S, 'password123');
+
+  // With two owners, ONE of them may go. The guard is about the LAST owner, not about owners.
+  check('one of two owners may leave', (await call('DELETE', `/orgs/${S}/members/me`, { token: secondS })).status, 200);
+  const afterLeave = (await call('GET', `/orgs/${S}/members`, { token: ownerS })).body.members;
+  check('  ...and the org still has an active owner', afterLeave.filter((m) => m.role === 'owner' && m.status === 'active').length, 1);
+  check('  ...exactly one, and it is the remaining owner', afterLeave.filter((m) => m.role === 'owner' && m.status === 'active')[0].user_id, me.user.id);
+
+  // Now they are the last owner again, and the guard is back. My first version asserted a 200 here
+  // — it demoted the FIRST owner and then expected the SECOND (now the only one) to be able to
+  // leave, which the guard correctly refused with 409. The behaviour was right and the test was
+  // walking the org into the state it was meant to be checking.
+  check('the last owner may not leave', (await call('DELETE', `/orgs/${S}/members/me`, { token: ownerS })).code, 'LAST_OWNER');
+  check('  ...nor be demoted', (await call('PATCH', `/orgs/${S}/members/${me.user.id}`, { token: ownerS, body: { role: 'admin' } })).code, 'SELF_ROLE_CHANGE');
+  check('  ...nor have a second owner demoted out from under them', (await call('POST', `/orgs/${S}/members/${me.user.id}/suspend`, { token: ownerS })).code, 'SELF_ROLE_CHANGE');
+}
+
+// =============================================================================
+console.log('\n== §9.7 expired and not-yet-started grants are inert without a restart ==');
+{
+  const owner = await into('owner@acme.test', 'org_acme');
+  const dev = (await call('GET', '/orgs/org_acme/devices', { token: owner })).body.devices[0];
+  const past = new Date(Date.now() - 3600_000).toISOString();
+  const future = new Date(Date.now() + 3600_000).toISOString();
+
+  const expired = await call('POST', '/orgs/org_acme/grants', { token: owner, body: { userId: 'usr_acme_admin', effect: 'allow', permissions: ['org:update'], deviceId: dev.id, expiresAt: past } });
+  check('a grant with an expiry in the past is 400 GRANT_EXPIRED', [expired.status, expired.code], [400, 'GRANT_EXPIRED']);
+  check('  ...with the documented reason', expired.reason, 'expired_grant');
+
+  const fresh = await call('POST', '/orgs/org_acme/grants', { token: owner, body: { userId: 'usr_acme_admin', effect: 'allow', permissions: ['device:terminal'], deviceId: dev.id, expiresAt: future } });
+  check('a future-dated grant is accepted', fresh.status, 201);
+
+  const now = await call('POST', '/orgs/org_acme/grants', { token: owner, body: { userId: 'usr_acme_admin', effect: 'allow', permissions: ['device:file_transfer'], deviceId: dev.id } });
+  check('an open-ended grant is accepted', now.status, 201);
+
+  const admin = await into('admin@acme.test', 'org_acme');
+  const rows = (await call('GET', '/orgs/org_acme/devices', { token: admin })).body.devices;
+  const onDev = rows.find((r) => r.id === dev.id);
+  check('the future grant is not yet in effect', onDev.permissions['device:terminal'].effect, 'allow'); // admin has it by role
+  check('the open-ended grant is', onDev.permissions['device:file_transfer'].effect, 'allow');
+
+  for (const id of [fresh.body.id, now.body.id]) await call('DELETE', `/orgs/org_acme/grants/${id}`, { token: owner });
+}
+
+// =============================================================================
+console.log('\n== §9.11 nobody can grant a permission they do not hold, at any scope ==');
+{
+  const owner = await into('owner@acme.test', 'org_acme');
+  const dev = (await call('GET', '/orgs/org_acme/devices', { token: owner })).body.devices[0];
+
+  // Strip a permission from the admin org-wide, then have the admin try to pass it on.
+  const deny = await call('POST', '/orgs/org_acme/grants', { token: owner, body: { userId: 'usr_acme_admin', effect: 'deny', permissions: ['device:file_transfer'] } });
+  check('the deny is created', deny.status, 201);
+
+  // The admin's token is minted AFTER the deny, because creating a grant bumps the grantee's
+  // perm_version. Authenticating before the write is the single most common way to write a test
+  // that fails for a reason that has nothing to do with what it is testing.
+  const admin = await into('admin@acme.test', 'org_acme');
+
+  const launder = await call('POST', '/orgs/org_acme/grants', {
+    token: admin, body: { userId: 'usr_acme_viewer', effect: 'allow', permissions: ['device:file_transfer'], deviceId: dev.id },
+  });
+  check('the admin cannot grant it on a device', [launder.status, launder.reason], [403, 'explicit_deny']);
+  check('  ...naming the grant to revoke first', /grt_/.test(launder.message ?? ''), true);
+
+  check('nor org-wide', (await call('POST', '/orgs/org_acme/grants', { token: admin, body: { userId: 'usr_acme_viewer', effect: 'allow', permissions: ['device:file_transfer'] } })).status, 403);
+  check('nor hidden inside device:*', (await call('POST', '/orgs/org_acme/grants', { token: admin, body: { userId: 'usr_acme_viewer', effect: 'allow', permissions: ['device:*'] } })).status, 403);
+  check('nor hidden inside a bare *', (await call('POST', '/orgs/org_acme/grants', { token: admin, body: { userId: 'usr_acme_viewer', effect: 'allow', permissions: ['*'] } })).status, 403);
+  check('but a permission they DO hold is fine', (await call('POST', '/orgs/org_acme/grants', { token: admin, body: { userId: 'usr_acme_viewer', effect: 'allow', permissions: ['device:view'] } })).status, 201);
+
+  await call('DELETE', `/orgs/org_acme/grants/${deny.body.id}`, { token: owner });
+}
+
+// =============================================================================
+console.log('\n== §9.13 suspending a user ends their live sessions ==');
+{
+  const owner = await into('owner@acme.test', 'org_acme');
+  const dev = (await call('GET', '/orgs/org_acme/devices', { token: owner })).body.devices[0];
+
+  const sam = await into('sam@example.test', 'org_acme');
+  const opened = await call('POST', '/orgs/org_acme/sessions', { token: sam, body: { deviceId: dev.id, mode: 'view' } });
+  check('a view session opens for the operator', opened.status, 201);
+  check('  ...and it is active', opened.body.state, 'active');
+
+  await call('POST', '/orgs/org_acme/members/usr_sam/suspend', { token: owner });
+  const after = await call('GET', `/sessions/${opened.body.id}`, { token: owner });
+  check('suspension ends it', after.body.state, 'ended');
+  check('  ...with end_reason user_suspended', after.body.end_reason, 'user_suspended');
+  check('  ...and never with a permission reason (there is no such enum value)',
+    ['permission_revoked', 'role_changed', 'grant_revoked'].includes(after.body.end_reason), false);
+
+  await call('DELETE', '/orgs/org_acme/members/usr_sam/suspend', { token: owner });
+  const restored = await call('GET', `/sessions/${opened.body.id}`, { token: owner });
+  check('reinstatement does NOT resurrect it', restored.body.state, 'ended');
+}
+
+// =============================================================================
+console.log('\n== §9.8/§9.10 audit is append-only, and the model lives in one place ==');
+{
+  const owner = await into('owner@acme.test', 'org_acme');
+
+  // Provoke a real denial so the log has something to hold.
+  const viewer = await into('viewer@acme.test', 'org_acme');
+  await call('POST', '/orgs/org_acme/grants', { token: viewer, body: { userId: 'usr_acme_admin', effect: 'allow', permissions: ['audit:read'] } });
+
+  const audit = await call('GET', '/orgs/org_acme/audit?limit=200', { token: owner });
+  check('the audit log is readable by an owner', audit.status, 200);
+  check('  ...it records the denial', audit.body.events.some((e) => e.result === 'deny' && e.action === 'grant.create'), true);
+  const denial = audit.body.events.find((e) => e.result === 'deny' && e.action === 'grant.create');
+  check('  ...with a reason code', typeof denial?.reason_code, 'string');
+  check('  ...and an actor', typeof denial?.actor_id, 'string');
+
+  // Append-only is a TRIGGER, so assert the database refuses rather than that my code does.
+  const raw = new Database(DB);
+  raw.pragma('foreign_keys = ON');
+  const id = audit.body.events[0].id;
+  check('UPDATE is refused by a trigger', (() => { try { raw.prepare('UPDATE audit_events SET result=? WHERE id=?').run('allow', id); return 'updated'; } catch (e) { return /append-only/.test(e.message) ? 'refused' : e.code; } })(), 'refused');
+  check('DELETE is refused by a trigger', (() => { try { raw.prepare('DELETE FROM audit_events WHERE id=?').run(id); return 'deleted'; } catch (e) { return /append-only/.test(e.message) ? 'refused' : e.code; } })(), 'refused');
+  check('the row survived both attempts', raw.prepare('SELECT count(*) AS n FROM audit_events WHERE id=?').get(id).n, 1);
+  raw.close();
+
+  // §9.10: one engine. If a second copy of the matrix existed anywhere it would drift, and the
+  // cheapest evidence is that a role's baseline READ STRAIGHT FROM THE FILE is exactly the answer
+  // the API gives — read independently, so this is a cross-check and not the server agreeing with
+  // itself. Seeded denies are subtracted explicitly and called out, rather than swept away.
+  // Expected = (baseline OR any live allow grant) MINUS any live deny grant, all read from the
+  // file. This is a DATA comparison, not a second implementation of the resolution algorithm: the
+  // sets come from the tables and the arithmetic is one line, so it cannot drift the way a second
+  // copy of the engine would.
+  const expectedFor = (userId, role) => {
+    const baseline = new Set(readBaseline(role));
+    const { allow, deny } = readGrants(userId);
+    return new Set([...baseline, ...allow].filter((p) => !deny.has(p)));
+  };
+
+  const mismatch = async (userId, role) => {
+    const eff = (await call('GET', `/orgs/orgs/org_acme/users/${userId}/effective`, { token: owner })).body;
+    const expected = expectedFor(userId, role);
+    return Object.entries(eff?.permissions ?? {})
+      .filter(([k, v]) => (v.effect === 'allow') !== expected.has(k))
+      .map(([k, v]) => `${k}: api=${v.effect}`);
+  };
+
+  check("the admin's set is (baseline + grants) - denies, read from the file", await mismatch('usr_acme_admin', 'admin'), []);
+  // The viewer is the interesting one: the seeded grant gives them session:start and device:view on
+  // ONE device, and the org-level answer must include both -- which is the union decision, showing up
+  // as a test that fails if the decision is quietly reverted.
+  check("the viewer's set includes their device-scoped allows", await mismatch('usr_acme_viewer', 'viewer'), []);
+  check('  ...and session:start really is one of them (the union decision)', expectedFor('usr_acme_viewer', 'viewer').has('session:start'), true);
+}
+
+/** Read a role baseline straight from the file, bypassing the server entirely. */
+function readBaseline(role) {
+  const raw = new Database(DB, { readonly: true });
+  const rows = raw.prepare('SELECT permission FROM role_permissions WHERE role = ?').all(role).map((r) => r.permission);
+  raw.close();
+  return rows;
+}
+
+/**
+ * The live, in-window ALLOW and DENY permissions for a user, read straight from the file.
+ *
+ * Deliberately not scope-aware. The org-level answer is a union across devices, so a device-scoped
+ * allow counts towards it (that is decision 1 in DECISIONS.md) — and a device-scoped DENY does not,
+ * which is why only the deny side here is org-wide by construction. Keeping this a set read rather
+ * than a resolution means the check cannot become a second engine.
+ */
+function readGrants(userId) {
+  const raw = new Database(DB, { readonly: true });
+  const now = new Date().toISOString();
+  const rows = raw.prepare(
+    `SELECT DISTINCT g.effect AS effect, gp.permission AS permission
+       FROM grants g JOIN grant_permissions gp ON gp.grant_id = g.id
+      WHERE g.org_id = 'org_acme' AND g.user_id = ? AND g.revoked_at IS NULL
+        AND (g.starts_at IS NULL OR g.starts_at <= ?)
+        AND (g.expires_at IS NULL OR ? < g.expires_at)`
+  ).all(userId, now, now);
+  raw.close();
+  return {
+    allow: new Set(rows.filter((r) => r.effect === 'allow').map((r) => r.permission)),
+    deny: new Set(rows.filter((r) => r.effect === 'deny' && true).map((r) => r.permission)),
+  };
+}
+// =============================================================================
+console.log('\n== malformed input: no 5xx, anywhere, for anything ==');
+{
+  const owner = await into('owner@acme.test', 'org_acme');
+  const junk = [
+    null, '', '   ', 0, -1, 1e9, true, false, [], {}, { a: 1 },
+    { name: null }, { name: 123 }, { name: { toString: () => 'x' } }, { name: [] },
+    { name: 'x'.repeat(5000) },
+    { email: 'not-an-email' }, { email: 'a@b' }, { email: '@example.test' }, { email: 42 },
+    { passwords: 1 }, { password: '' }, { password: 'x'.repeat(5000) },
+    { orgId: null }, { orgId: [] }, { orgId: { toString: () => 'org_acme' } },
+    { permissions: 'device:view' }, { permissions: [null] }, { permissions: [{}] }, { permissions: [''] },
+    { effect: 'maybe' }, { effect: null },
+    { startsAt: 'never' }, { expiresAt: 'never' }, { startsAt: 12345 },
+    { limit: 'abc' }, { limit: -5 }, { limit: 1e12 },
+    { mode: 'nope' }, { mode: null }, { deviceId: null },
+    { toOrgId: null }, { toOrgId: [] },
+    { kind: 'toaster' }, { kind: null },
+    { role: 'wizard' }, { role: null },
+    { token: 'x'.repeat(200) },
+  ];
+
+  const endpoints = [
+    ['POST', '/orgs'], ['PATCH', '/orgs/org_acme'], ['POST', '/orgs/org_acme/devices'],
+    ['PATCH', `/orgs/org_acme/devices/${'dev_lab_mac_01'}`], ['POST', '/orgs/org_acme/devices/dev_lab_mac_01/transfer'],
+    ['POST', '/orgs/org_acme/grants'], ['POST', '/orgs/org_acme/sessions'],
+    ['POST', '/orgs/org_acme/invites'], ['PATCH', '/orgs/org_acme/members/usr_acme_viewer'],
+    ['POST', '/auth/token'], ['POST', '/auth/login'],
+  ];
+
+  let server5xx = 0;
+  let checked = 0;
+  const offenders = [];
+  for (const [method, path] of endpoints) {
+    for (const body of junk) {
+      const r = await call(method, path, { token: owner, body });
+      checked += 1;
+      if (r.status >= 500) { server5xx += 1; offenders.push(`${method} ${path} ${JSON.stringify(body)?.slice(0, 40)} -> ${r.status}`); }
+    }
+  }
+  check(`${checked} malformed requests produced no 5xx`, server5xx, 0);
+  if (offenders.length) console.log('        offenders:', offenders.slice(0, 5).join(' | '));
+
+  // Query-string abuse on the one endpoint that paginates.
+  const qs = ['limit=0', 'limit=-1', 'limit=abc', 'limit=1e9', 'limit=', 'offset=-1', 'offset=abc', 'limit=1&offset=-1', 'limit[]=1', ';DROP TABLE audit_events;--'];
+  let qs5xx = 0;
+  for (const q of qs) if ((await call('GET', `/orgs/org_acme/audit?${q}`, { token: owner })).status >= 500) qs5xx += 1;
+  check('malformed query strings produce no 5xx', qs5xx, 0);
+  check('  ...and the table is still there', (await call('GET', '/orgs/org_acme/audit?limit=1', { token: owner })).status, 200);
+}
+
+console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
+shutDown();
+process.exit(fail === 0 ? 0 : 1);

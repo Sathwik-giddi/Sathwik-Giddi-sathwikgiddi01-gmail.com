@@ -321,10 +321,21 @@ permission. `scope_mismatch` has the same problem, and I found it the hard way: 
 is collected at every device scope, so holding a permission org-wide but not on one device
 requires a device-scoped deny, which is `explicit_deny` (`DECISIONS.md`, decision 3).
 
-**Built against §3**, and both codes are absent from resolved permissions. `expired_grant` does
-appear as an HTTP reason on grant *creation* with an expiry in the past, which is the one place
-the phrase is actually true — the request is refused because the window has closed, not because
-resolution reached a verdict.
+**Built against §3**, and both codes are absent from a *resolved permission* — which is where I
+originally read the list as applying, and where it cannot apply.
+
+I also got the second half of this wrong and said so in a draft of this file: I wrote that
+`expired_grant` "does appear as an HTTP reason on grant *creation* with an expiry in the past". At
+the time I emitted `reason: "invalid_window"` and not `expired_grant`, so the sentence described an
+intent rather than the code. It now emits the documented string, and the test asserts it:
+
+```
+POST /grants { expiresAt: <past> }  ->  400 GRANT_EXPIRED, reason 'expired_grant'
+```
+
+`GRANT_EXPIRED` is named twice by `PERMISSIONS.md §5` — once in the code table and once in the
+prose list of reasons — and the two want different fields. So the code is `GRANT_EXPIRED` and the
+reason is `expired_grant`. `scope_mismatch` has no such second life and remains unreachable.
 
 ### 2. `AUTH-DATA-MODEL.md §10` wants 403 for a suspended token, and "an empty permission set" in the same breath
 
