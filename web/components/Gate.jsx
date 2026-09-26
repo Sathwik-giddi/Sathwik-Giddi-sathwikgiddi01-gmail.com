@@ -47,50 +47,70 @@ export function Login({ onSignedIn, notice }) {
 
   return (
     <div className="gate">
-      <form className="gate__card" data-testid="login-form" onSubmit={submit} noValidate>
-        <div className="gate__mark" aria-hidden="true">◈</div>
-        <h1 className="gate__title">RemoteOps</h1>
-        <p className="gate__sub">Multi-organization permission console</p>
+      <div className="gate__split">
+      {/* The premise gets its own column because this is the one screen with room to say what the
+          product actually is, and saying it is worth more than a logo. Three claims, each of which
+          is a thing the console genuinely does — not a tagline. */}
+      <section className="gate__premise">
+        <p className="gate__eyebrow">RemoteOps</p>
+        <h1 className="gate__claim">Know who can do what — and why.</h1>
+        <ul className="gate__points">
+          <li>Several organizations share this deployment. None of them can see each other, and a request for something that does not exist is answered as though it never did.</li>
+          <li>Every power you see came from somewhere: your role, a grant someone made you, or a refusal someone made against you. The console shows which.</li>
+          <li>Changing someone's access takes effect on their next request, not when their session happens to expire.</li>
+        </ul>
+      </section>
 
-        {notice && <p className="notice" role="status">{notice}</p>}
+      <div className="gate__panel">
+        <form className="gate__form" data-testid="login-form" onSubmit={submit} noValidate>
+          <div>
+            <h2 className="gate__title">Sign in</h2>
+            <p className="gate__sub">Multi-organization permission console</p>
+          </div>
 
-        <label className="field">
-          <span>Email</span>
-          <input
-            data-testid="login-email"
-            type="email"
-            autoComplete="username"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-        </label>
+          {notice && <p className="notice" role="status">{notice}</p>}
 
-        <label className="field">
-          <span>Password</span>
-          <input
-            data-testid="login-password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-          />
-        </label>
+          <label className="field">
+            <span>Email</span>
+            <input
+              data-testid="login-email"
+              type="email"
+              autoComplete="username"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </label>
 
-        <button data-testid="login-submit" className="btn btn--primary" disabled={busy}>
-          {busy ? 'Signing in…' : 'Sign in'}
-        </button>
+          <label className="field">
+            <span>Password</span>
+            <input
+              data-testid="login-password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </label>
 
-        {error && (
-          <p className="error" data-testid="login-error" data-error-code={error.code} role="alert">
-            {error.message}
-          </p>
-        )}
+          <button data-testid="login-submit" className="btn btn--primary" disabled={busy}>
+            {busy ? 'Signing in…' : 'Sign in'}
+          </button>
+
+          {error && (
+            <p className="error" data-testid="login-error" data-error-code={error.code} role="alert">
+              {error.message}
+            </p>
+          )}
+        </form>
 
         <p className="gate__hint">
-          Demo accounts: <code>dana@example.test</code>, <code>sam@example.test</code>,{' '}
-          <code>viewer@acme.test</code> — password <code>demo1234</code>
+          <b>Demo accounts</b>, all with the password <code>demo1234</code>:<br />
+          <code>owner@acme.test</code> sees everything · <code>viewer@acme.test</code> can only
+          look · <code>dana@example.test</code> belongs to two organizations, so you can switch
+          between them.
         </p>
-      </form>
+      </div>
+      </div>
     </div>
   );
 }

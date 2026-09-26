@@ -121,7 +121,24 @@ export function App() {
   }
 
   if (booting) {
-    return <div className="gate"><div className="gate__card"><h1 className="gate__title">RemoteOps</h1><p className="gate__sub">Restoring your session…</p></div></div>;
+    // Matches the new split gate rather than the old centred card, so the app does not visibly jump
+    // shape on a fast reload.
+    return (
+      <div className="gate">
+        <div className="gate__split">
+        <section className="gate__premise">
+          <p className="gate__eyebrow">RemoteOps</p>
+          <h1 className="gate__claim">Know who can do what — and why.</h1>
+        </section>
+        <div className="gate__panel">
+          <div>
+            <h2 className="gate__title">Restoring your session</h2>
+            <p className="gate__sub">Checking your refresh token…</p>
+          </div>
+        </div>
+        </div>
+      </div>
+    );
   }
 
   if (!me) return <Login onSignedIn={signIn} notice={bootError ? `Could not sign you in: ${bootError}` : notice} />;
@@ -331,8 +348,10 @@ function Shell({ me, onReload, onSignOut }) {
                 <span className="orgchip__role">{o.role}</span>
               </button>
             ))}
-            <button data-testid="create-org" className="btn btn--ghost" onClick={createOrg} title="Create an organization">
-              + New
+            {/* Was "+ New", which says nothing about what it creates. A control should name the
+                thing it makes; the test id stays `create-org` either way. */}
+            <button data-testid="create-org" className="btn" onClick={createOrg}>
+              New organization
             </button>
           </div>
         </header>

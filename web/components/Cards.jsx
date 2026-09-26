@@ -138,26 +138,34 @@ function DeviceRow({ orgId, device, orgs, busy, run, onError }) {
           </>
         ) : (
           <>
-            <PermButton permissions={p} permission="device:view" data-testid="start-view" title={`View ${device.name} · ${provenance(verdict(p, 'device:view'))}`}
-              onClick={() => run(`view-${device.id}`, () => api.startSession(orgId, device.id, 'view').catch(surfaceError(onError)))}>
-              View
-            </PermButton>
-            <PermButton permissions={p} permission="device:control" data-testid="start-control" title={`Control ${device.name} · ${provenance(verdict(p, 'device:control'))}`}
-              onClick={() => run(`control-${device.id}`, () => api.startSession(orgId, device.id, 'control').catch(surfaceError(onError)))}>
-              Control
-            </PermButton>
-            <PermButton permissions={p} permission="device:terminal" data-testid="start-terminal" title={`Terminal ${device.name} · ${provenance(verdict(p, 'device:terminal'))}`}
-              onClick={() => run(`terminal-${device.id}`, () => api.startSession(orgId, device.id, 'terminal').catch(surfaceError(onError)))}>
-              Terminal
-            </PermButton>
+            {/* The three session verbs act on the same object and are the same verb on it, so they
+                sit as one group rather than as three peer buttons. `.actgroup .perm::after` draws
+                the provenance rule: solid from the role, dashed from a grant. That is the point of
+                the whole application and it used to be reachable only by hovering a `title`. */}
+            <div className="actgroup">
+              <PermButton permissions={p} permission="device:view" source={verdict(p, 'device:view')?.source} data-testid="start-view" title={`View ${device.name} · ${provenance(verdict(p, 'device:view'))}`}
+                onClick={() => run(`view-${device.id}`, () => api.startSession(orgId, device.id, 'view').catch(surfaceError(onError)))}>
+                View
+              </PermButton>
+              <PermButton permissions={p} permission="device:control" source={verdict(p, 'device:control')?.source} data-testid="start-control" title={`Control ${device.name} · ${provenance(verdict(p, 'device:control'))}`}
+                onClick={() => run(`control-${device.id}`, () => api.startSession(orgId, device.id, 'control').catch(surfaceError(onError)))}>
+                Control
+              </PermButton>
+              <PermButton permissions={p} permission="device:terminal" source={verdict(p, 'device:terminal')?.source} data-testid="start-terminal" title={`Terminal ${device.name} · ${provenance(verdict(p, 'device:terminal'))}`}
+                onClick={() => run(`terminal-${device.id}`, () => api.startSession(orgId, device.id, 'terminal').catch(surfaceError(onError)))}>
+                Terminal
+              </PermButton>
+            </div>
             <PermButton permissions={p} permission="device:file_transfer" data-testid="transfer-files" title={`Transfer files · ${provenance(verdict(p, 'device:file_transfer'))}`}
               onClick={() => run(`xfer-${device.id}`, () => startTransfer(orgId, device, orgs))}>
-              Transfer files
+              Transfer
             </PermButton>
             <PermButton permissions={p} permission="device:update" data-testid="rename-device" title={`Rename · ${provenance(verdict(p, 'device:update'))}`}
               onClick={() => { setName(device.name); setRenaming(true); }}>
               Rename
             </PermButton>
+            {/* Decommission stops a machine responding for good. It is pushed to the far end of the
+                row and drawn as a text action, so it cannot be misread as a peer of "View". */}
             <PermButton permissions={p} permission="device:provision" data-testid="decommission-device" title={`Decommission · ${provenance(verdict(p, 'device:provision'))}`}
               className="danger"
               onClick={() => run(`decom-${device.id}`, async () => {
@@ -427,7 +435,7 @@ export function GrantsCard({ orgId, orgPermissions, grants, members, devices, on
       ) : (
         <table className="table">
           <thead>
-            <tr><th>Who</th><th>Scope</th><th>Effect</th><th>Permissions</th><th /></tr>
+            <tr><th>Who</th><th>Scope</th><th>Effect</th><th>Permissions</th><th>Actions</th></tr>
           </thead>
           <tbody>
             {grants.map((g) => (
@@ -627,7 +635,7 @@ export function SessionsCard({ orgId, orgPermissions, sessions, devices, onReloa
       ) : (
         <table className="table">
           <thead>
-            <tr><th>Who</th><th>Device</th><th>Mode</th><th>State</th><th>Started</th><th>Expires</th><th /></tr>
+            <tr><th>Who</th><th>Device</th><th>Mode</th><th>State</th><th>Started</th><th>Expires</th><th>Actions</th></tr>
           </thead>
           <tbody>
             {sessions.map((s) => (
