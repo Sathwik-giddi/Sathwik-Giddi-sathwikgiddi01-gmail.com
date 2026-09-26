@@ -28,6 +28,10 @@ export default defineConfig({
       PORT: String(PORT),
       NODE_ENV: 'production',
       JWT_SECRET: 'e2e-secret',
+      // Added, not in the hand-out. The server now refuses to boot in production without this,
+      // because a known key makes the stored refresh/invite token hashes reproducible by anyone
+      // holding the database. `JWT_SECRET` alone is no longer enough to start the test server.
+      APP_HASH_KEY: 'e2e-hash-key',
     },
   },
 });

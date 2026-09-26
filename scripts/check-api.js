@@ -17,7 +17,7 @@ for (const s of ['', '-wal', '-shm']) if (existsSync(DB + s)) rmSync(DB + s);
 execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB }, stdio: 'ignore' });
 
 const server = spawn(process.execPath, ['server/index.js'], {
-  env: { ...process.env, DATABASE_FILE: DB, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: 'test-secret' },
+  env: { ...process.env, DATABASE_FILE: DB, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: 'test-secret', APP_HASH_KEY: 'test-secret' },
   stdio: ['ignore', 'ignore', 'inherit'],
 });
 

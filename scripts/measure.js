@@ -166,7 +166,7 @@ console.log('\n\x1b[1mLATENCY OVER REAL HTTP\x1b[0m   (production server, fresh 
 const { spawn } = await import('node:child_process');
 const PORT = 8177;
 const server = spawn(process.execPath, ['server/index.js'], {
-  env: { ...process.env, DATABASE_FILE: DB_FILE, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: SECRET },
+  env: { ...process.env, DATABASE_FILE: DB_FILE, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: SECRET, APP_HASH_KEY: SECRET },
   stdio: ['ignore', 'ignore', 'inherit'],
 });
 await new Promise((r) => setTimeout(r, 900));

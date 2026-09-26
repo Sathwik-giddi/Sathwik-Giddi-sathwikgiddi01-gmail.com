@@ -17,6 +17,7 @@
 
 import { spawn, execFileSync } from 'node:child_process';
 import { rmSync, existsSync } from 'node:fs';
+import { createHmac, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
 const PORT = 8179;
@@ -28,7 +29,7 @@ for (const suffix of ['', '-wal', '-shm']) if (existsSync(DB + suffix)) rmSync(D
 execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB }, stdio: 'ignore' });
 
 const server = spawn(process.execPath, ['server/index.js'], {
-  env: { ...process.env, DATABASE_FILE: DB, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: SECRET },
+  env: { ...process.env, DATABASE_FILE: DB, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: SECRET, APP_HASH_KEY: SECRET },
   stdio: ['ignore', 'ignore', 'inherit'],
 });
 await new Promise((r) => setTimeout(r, 1000));
@@ -475,6 +476,68 @@ console.log('\n== every 400 carries a machine-readable reason ==');
   const weak = await call('POST', `/invites/${inv.body.inviteToken}/accept`, { body: { name: 'X', password: 'short' } });
   check('a weak password at accept -> 400 weak_password', [weak.status, weak.reason], [400, 'weak_password']);
   await call('DELETE', `/orgs/org_acme/invites/${inv.body.id}`, { token: owner });
+}
+
+// ---------------------------------------------------------------------------
+// Found by scripts/pentest.js, not by the spec. Kept here so the shipped suite fails if it
+// ever comes back.
+//
+// The `role` claim is an authorization INPUT (AUTH-DATA-MODEL.md §1 D11) and must never be an
+// authority. `authenticate()` used to set `ctx.role = claims.role`, which meant anyone who could
+// sign a token — a leaked key, a committed .env, or `npm start` signing with the published
+// default `dev-secret-change-me` — could put `role:"owner"` in a token and promote a viewer to
+// owner, because lifecycle.js ranks `ctx.role`. Reproduced over HTTP: a forged admin token
+// returned 200 and `{"role":"owner","perm_version":2}` where the honest one got 403.
+console.log('\n== a forged role claim must not outrank the membership row ==');
+{
+  const admin = await into('admin@acme.test', 'org_acme');
+  const asAdmin = await call('GET', '/orgs/org_acme/devices', { token: admin });
+  // Read sub/org/pv off a real token rather than hardcoding them. An earlier version of this block
+  // hardcoded `sub: 'ln'`, which is not a user, so every forged token was refused at the
+  // membership lookup and the block passed against the vulnerable code — a green test that
+  // proved nothing, which is the exact failure this file's header warns about.
+  const realClaims = JSON.parse(Buffer.from(admin.split('.')[1], 'base64url').toString());
+  const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const forge = (over) => {
+    const h = b64u({ alg: 'HS256', typ: 'JWT' });
+    const p = b64u({
+      iss: 'remoteops', aud: 'remoteops-api', jti: `jti-${randomUUID()}`,
+      iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 900,
+      sub: realClaims.sub, org: realClaims.org, role: realClaims.role, pv: realClaims.pv,
+      ...over,
+    });
+    return `${h}.${p}.${createHmac('sha256', SECRET).update(`${h}.${p}`).digest('base64url')}`;
+  };
+
+  // The real token must work, or the refusals below would prove nothing.
+  check('a real admin token works, so the forgeries below are meaningful', asAdmin.status, 200);
+  check('the real token says admin', realClaims.role, 'admin');
+
+  // The attack. Expected: refused. Before the fix this was 200 and the viewer became owner.
+  const up = await call('PATCH', '/orgs/org_acme/members/usr_acme_viewer', {
+    token: forge({ role: 'owner' }), body: { role: 'owner' },
+  });
+  check('forged role:owner -> 401, not a promotion', up.status, 401);
+  const stillViewer = await call('GET', '/orgs/org_acme/members', { token: admin });
+  check('the viewer is still a viewer', stillViewer.body.members.find((m) => m.user_id === 'usr_acme_viewer')?.role, 'viewer');
+
+  // The mirror image: claiming to be LESS than you are must not be a way in either.
+  const down = await call('PATCH', '/orgs/org_acme/members/usr_acme_owner', {
+    token: forge({ role: 'viewer' }), body: { role: 'viewer' },
+  });
+  check('forged role:viewer -> 401, not a demotion', down.status, 401);
+
+  // Freshness is not forgeable either: assertFresh is `!==`, so guessing a version fails.
+  for (const pv of [realClaims.pv + 1, 999, 0]) {
+    const stale = await call('GET', '/orgs/org_acme/devices', { token: forge({ pv }) });
+    check(`forged pv ${pv} -> 401`, stale.status, 401);
+  }
+
+  // The org claim is not forgeable either: a subject with no membership in the named org.
+  const foreign = await call('GET', '/orgs/org_globex/devices', {
+    token: forge({ org: 'org_globex', role: 'owner' }),
+  });
+  check('claiming an org the subject is not in -> 401', foreign.status, 401);
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);

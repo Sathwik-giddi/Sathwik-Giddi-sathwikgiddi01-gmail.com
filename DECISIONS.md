@@ -363,6 +363,98 @@ the operator is trusted. On a network endpoint the debugging gain does not pay f
 would use specific messages, because there the operator is the attacker and detail is worth more than
 obscurity.
 
+### A JWT `role` claim is an input, and `AUTH-DATA-MODEL.md §1` calls it one
+
+**What I chose:** `ctx.role` is `membership.role`, read from the database, and a token whose `role`
+claim disagrees with the row is rejected with 401 rather than corrected.
+
+**Why:** I read D11 — "the token carries the authorization *inputs*, the server resolves the
+permissions" — as being about payload size. Resolve permissions per request; do not bake the set
+into the token. So the resolver read the database, and `ctx.role` came from `claims.role`.
+`server/lifecycle.js` then ranks `ctx.role` in `assertRoleAssignable` and `assertCanModify`, which
+made the token's `role` field load-bearing after all.
+
+`scripts/pentest.js` found it. A token byte-identical to a real admin's except `role:"owner"`:
+
+```
+real   -> PATCH /v1/orgs/org_acme/members/usr_acme_viewer {"role":"owner"} -> 403
+forged -> PATCH /v1/orgs/org_acme/members/usr_acme_viewer {"role":"owner"} -> 200
+          {"user_id":"usr_acme_viewer","role":"owner","perm_version":2}
+```
+
+An admin promoted a viewer to owner, in the database, in the audit log. Every other control held —
+the endpoint, the rank table, the last-owner guard — because all of them trusted the wrong input.
+
+The part worth keeping is *why* a mismatch is an error instead of a silent correction. By the time
+`authenticate()` reaches the check, `assertFresh` has already proved the token's `perm_version`
+still matches the row, and every role change bumps `perm_version`. The two values are therefore
+equal by construction for any honestly-minted token. Unequal means the signing key leaked or the
+token was forged; there is no legitimate state in which they differ, so tolerating one would be
+tolerating an attack.
+
+**What I rejected:** trusting the claim and letting the resolver catch up, which is what the code
+did. Also rejecting the whole token as a `TOKEN_STALE` — the credential is not stale, it is
+inauthentic, and conflating the two would send a legitimate client into a refresh loop that cannot
+fix anything.
+
+**What would change my mind:** a deployment where the membership row is genuinely unavailable on the
+request path. Then the claim would have to stand in for it, and the honest answer would be a signed
+short-lived assertion that is re-validated against the database before any *write* — not before
+every read.
+
+The general rule: **a claim is a cache of something the server already knows. If acting on the claim
+is cheaper than reading the source of truth, the claim will eventually be acted on alone.**
+
+### A dev default is fine; a dev default reachable in production is not
+
+**What I chose:** `JWT_SECRET` and `APP_HASH_KEY` keep their development literals, and a missing key
+in production is fatal at boot — the error message carries the command that generates one.
+
+**Why:** both were `process.env.X ?? '<literal>'`, and both fallbacks were reachable in production,
+because the hand-out's own `npm start` sets `NODE_ENV=production` and sets neither. The documented
+way to run this application therefore signed every access token with a value published in the
+repository, and `scripts/pentest.js` mints one with it and reads four devices as a user who has
+never authenticated. `APP_HASH_KEY` was the same mistake one line away, three lines below a comment
+in `server/auth.js` saying the key "is an application secret, not a hardcoded literal".
+
+**What I rejected:** warning loudly and booting anyway, which is the option that looks responsible.
+A server that starts with a known signing key looks healthy, passes its own suite, and fails open.
+A server that refuses to start is inconvenient for about four seconds and is correct forever. This
+is the entire difference between a default and a vulnerability.
+
+It forced one change to a hand-out file: `playwright.config.js`'s `webServer.env` set `JWT_SECRET`
+and would no longer boot. I changed the env block and nothing else, because a repository whose
+`npm test` does not run is worse than one that departs from the issued harness in a way that is
+written down in `BUILD-LOG.md`.
+
+**What would change my mind:** a hosting target where the operator genuinely cannot set environment
+variables, and generating a random key at boot persisted to a file would then be correct. It would
+still have to fail if that file were missing, because an ephemeral key silently invalidates every
+refresh token on restart.
+
+### `npm run check` asserts the security property; `npm run pentest` attacks it
+
+**What I chose:** the forgery regressions live in `check-hardening.js` beside every other hardening
+assertion. `scripts/pentest.js` is a separate `npm run pentest`.
+
+**Why:** the gate that runs in CI should be the one that fails if a fix is reverted, and that is
+`check-hardening.js`. The pentest stays separate because it spawns two servers and because its
+output reads like an argument rather than a report; folding it in would mean the headline "509
+assertions" could only be quoted with a footnote about 9 of them being an attacker.
+
+The reason this is a decision at all: I wrote the nine regression assertions, watched them pass, and
+they were **passing against the vulnerable code**. Two reasons, both unrelated to the bug — a
+hardcoded `sub: 'ln'` that is not a user, so every token died at the membership lookup, and a
+missing `jti`, so every token died again at the verifier. Two layers of a test that could not fail.
+
+**What I rejected:** trusting a green run. The only thing that found this was reverting the fix and
+requiring the test to go red, which is now the rule I would apply to every assertion I write: a test
+is not finished when it passes, it is finished when it has been seen to fail for the right reason.
+
+**What would change my mind:** nothing, but I would want the revert-and-confirm step written into
+the harness rather than remembered, because it is exactly the step that gets skipped under deadline
+and the suite still looks green.
+
 ## Where this repo argues with itself
 
 

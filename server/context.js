@@ -84,13 +84,29 @@ export function authenticate(db, secret) {
     // suspect as a stale one, and this is the one place that notices.
     assertFresh(claims, membership);
 
+    // P11: the token's `role` claim is an INPUT, never an authority. It exists so the client can
+    // render without a second round trip; the membership row is what the server decides with.
+    //
+    // These two values are not supposed to be able to disagree. A role change bumps
+    // `perm_version` (server/routes/orgs.js) and `assertFresh` above just proved the token's `pv`
+    // still matches, so for any honestly-minted token they are equal by construction. Reaching
+    // this line with `claims.role !== membership.role` therefore means one of two things: the
+    // signing key leaked, or the token was forged. Both are 401.
+    //
+    // Before this check, `ctx.role` was `claims.role`, which meant a token saying `role:"owner"`
+    // carried owner rank into lifecycle.js's `assertRoleAssignable`/`assertCanModify` and could
+    // promote a viewer to owner. Signing is what makes a claim authentic — not the field name.
+    if (claims.role !== membership.role) {
+      throw unauthenticated('token role does not match the membership');
+    }
+
     const user = stmt(db, 'userById').get(claims.sub);
     if (!user) throw unauthenticated('not a member of this org');
 
     return {
       userId: claims.sub,
       orgId: claims.org,
-      role: claims.role,
+      role: membership.role,
       user,
       membership,
       claims,

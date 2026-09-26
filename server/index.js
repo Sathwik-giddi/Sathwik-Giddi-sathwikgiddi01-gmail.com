@@ -18,8 +18,42 @@ import { registerRoutes } from './routes/index.js';
 
 const DEV = process.env.NODE_ENV !== 'production';
 const PORT = Number(process.env.PORT ?? 8080);
-const SECRET = process.env.JWT_SECRET ?? 'dev-secret-change-me';
 const DIST = new URL('../dist/', import.meta.url).pathname;
+
+/**
+ * A required secret, or a refusal to start.
+ *
+ * This used to be `process.env.JWT_SECRET ?? 'dev-secret-change-me'`, and that fallback was
+ * reachable in production: `npm start` sets NODE_ENV=production and does not set JWT_SECRET, so
+ * the documented way to run the app signed every token with a literal that is published in the
+ * source. scripts/pentest.js mints a token with it and reads the org's devices.
+ *
+ * A dev default is still useful — `npm run dev` should work with no setup — so the fallback
+ * survives, but ONLY off the production path. In production a missing key is fatal at boot
+ * rather than a warning, because a server that starts with a known signing key is worse than a
+ * server that does not start: the first one looks healthy and fails open.
+ */
+function requireSecret(name, devFallback) {
+  const value = process.env[name];
+  if (typeof value === 'string' && value.length > 0) return value;
+  if (DEV) return devFallback;
+  const gen = `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`;
+  throw new Error(
+    `${name} must be set when NODE_ENV=production.\n` +
+      `  Generate one:  ${gen}\n` +
+      `  Then:          ${name}=<that value> npm start`,
+  );
+}
+
+const SECRET = requireSecret('JWT_SECRET', 'dev-secret-change-me');
+
+// The same mistake one line away, and it was worth fixing while here. auth.js HMACs refresh and
+// invite tokens with APP_HASH_KEY before storing them, and its own comment says the key "is an
+// application secret, not a hardcoded literal" — while defaulting to exactly that. A known key
+// does not make a 256-bit random token guessable, but it does make the stored hash reproducible
+// by anyone holding the database, which is the whole reason for storing a hash. Exported rather
+// than kept local because auth.js reads it back off process.env at module load.
+process.env.APP_HASH_KEY = requireSecret('APP_HASH_KEY', 'dev-only-app-hash-key-change-me');
 
 const db = openDatabase();
 const router = createRouter();

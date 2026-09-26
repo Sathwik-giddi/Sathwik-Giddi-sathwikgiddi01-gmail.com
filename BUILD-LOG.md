@@ -1046,6 +1046,102 @@ is always the same: **the assertion stops one step short of the thing you actual
   credential for a *different organization* than the one you were in. I had written this up as a
   harmless schema consequence; it is a credential-scope change, which is a different category.
 
+## Phase 10 — the pentest, and the two things it found
+
+Everything above was found by reading my own code against the specification. This phase was found
+by attacking it over HTTP, which is a different discipline: a reader looks for what the code means,
+an attacker looks for what it does. `scripts/pentest.js` is the harness — 60 lines of nothing but
+`fetch`, written from the attacker's side, and it fails loudly.
+
+### The method, and why it is two phases
+
+The harness boots the app twice. Phase A asks whether production will start without a signing key.
+Phase B *assumes the key is known* and asks what a forged token buys. The split is the whole
+point: fixing only the default would make Phase A pass while Phase B still escalates roles, and
+the second bug is the one that would have survived review.
+
+### C1 — the production signing key was a literal in the repository
+
+`server/index.js:21` was `process.env.JWT_SECRET ?? 'dev-secret-change-me'`, and the fallback was
+reachable in production, because `npm start` sets `NODE_ENV=production` and does not set
+`JWT_SECRET`. So the documented way to run this application signed **every access token** with a
+value published in the source. The harness mints one and reads four devices as a user who has
+never authenticated, then forges a session for any user in any org.
+
+A hardcoded signing key is not a weakness in the app; it is the absence of one. Signing is the only
+thing standing between a string on the wire and a session.
+
+### C2 — and knowing the key was enough to become an owner
+
+The reason C1 mattered more than a normal hardcoded secret: `authenticate()` set
+`ctx.role = claims.role`, taking the role out of the **token** rather than the **membership row**,
+and `lifecycle.js` ranks `ctx.role` to decide who may modify whom. So a token saying
+`role:"owner"` carried owner rank into `assertRoleAssignable` and `assertCanModify`.
+
+Reproduced end to end, as `admin@acme.test` with a token that is byte-identical to the real one
+except one field:
+
+```
+real   token  PATCH /v1/orgs/org_acme/members/usr_acme_viewer  {"role":"owner"}  -> 403
+forged token  PATCH /v1/orgs/org_acme/members/usr_acme_viewer  {"role":"owner"}  -> 200
+                                                                        {"user_id":"usr_acme_viewer",
+                                                                         "role":"owner","perm_version":2}
+```
+
+An admin promoted a viewer to owner, persistently, in the org's real audit log. Every other
+authorisation control held — the endpoint, the rank table, the last-owner guard — because the one
+thing they all trusted was the wrong input.
+
+`ctx.role` is now `membership.role`, and `authenticate()` rejects a token whose `role` claim
+disagrees with the row. That check is not defence in depth theatre: after `assertFresh` has
+proved the token's `pv` still matches, a role change has bumped `perm_version`, so for any
+honestly-minted token the two values are equal by construction. Reaching the check with them
+unequal means the key leaked or the token was forged, and both are 401.
+
+### The same mistake one line away
+
+`server/auth.js` HMACs refresh and invite tokens with `APP_HASH_KEY` and defaulted it to
+`'dev-only-app-hash-key-change-me'` — with a comment three lines above it saying the key "is an
+application secret, not a hardcoded literal". A known key does not make a 256-bit random token
+guessable, but it makes the stored hash *reproducible* by anyone holding the database, which is
+the entire reason for storing a hash rather than the token. Both keys are now required in
+production and both fail the boot with the command to generate them.
+
+### A green test that proved nothing
+
+Worth recording because it is the more instructive half. The first version of the regression test
+forged tokens with `sub: 'ln'`, hardcoded from an earlier suite in the same file. There is no user
+`ln` — the real id is `usr_acme_admin` — so every forged token was refused at the membership
+lookup and the block passed **against the vulnerable code**. It also omitted `jti`, which
+`verifyAccessToken` requires, so the tokens were refused a second time for a second unrelated
+reason. Two layers of a test that could not fail.
+
+Both were caught the only way a test like this can be caught: by reverting the fix and requiring
+the test to go red. It is now asserted against the vulnerable build and reports
+`got 200 want 401` and `got "owner" want "viewer"`. `check-hardening.js`'s own header warns about
+exactly this failure mode, and the fix satisfied every letter of it and still walked into it.
+
+The rest of the surface was already sound and the harness says so: cross-org reads 404 for forged
+and honest tokens alike, a foreign device id does not resolve, `perm_version` cannot be guessed
+(`!==`, so neither a future nor an arbitrary version passes), a removed membership is dead to a
+forged token, and `GET /%ff` still does not take the process down.
+
+### What phase 10 changed
+
+| | before | after |
+|---|---|---|
+| production boot, no `JWT_SECRET` | starts, signs with a published literal | refuses, names the variable, prints the generator |
+| `ctx.role` source | `claims.role` | `membership.role`, mismatch is 401 |
+| `APP_HASH_KEY` | published default | required in production |
+| forgeries in `check-hardening.js` | none | 9, verified to fail against the vulnerable build |
+| `npm run check` | 500 assertions | 509 assertions, 7 suites green |
+| UI | 34 passing | 34 passing |
+
+`playwright.config.js` is the one file from the hand-out I changed, and only its `webServer.env`:
+the server no longer starts without `APP_HASH_KEY`, so a test server that sets `JWT_SECRET` alone
+stops working. Leaving `npm test` broken for anyone who clones the repository would have been the
+worse outcome. The tests themselves, the settings and the assertions are as issued.
+
 ## Open threads
 
 Things I know are wrong, unfinished, or that I would do differently. Listed honestly because they

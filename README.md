@@ -22,12 +22,37 @@ npm run build        # vite build -> dist/
 npm start            # one process, production mode
 ```
 
+Production mode refuses to start without its two secrets — see [Run it](#run-it). `npm run dev`
+needs neither.
+
+## Run it
+
+`npm run dev` runs with built-in development keys so it works with no setup. `npm start` does not,
+and this is deliberate:
+
+```sh
+export JWT_SECRET=$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))")
+export APP_HASH_KEY=$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))")
+npm start
+```
+
+`JWT_SECRET` signs access tokens. `APP_HASH_KEY` HMACs refresh and invite tokens before they are
+stored. Both used to fall back to a literal in the source, and both fallbacks were reachable in
+production because `npm start` sets `NODE_ENV=production` without setting them — so the documented
+way to run the app signed every token with a value published in this repository. A missing key is
+now fatal at boot rather than a warning: a server that starts with a known signing key looks
+healthy and fails open, which is worse than a server that does not start.
+
+`scripts/pentest.js` is the proof. It boots production the way `npm start` does, mints tokens with
+the old default, and reports what they bought.
+
 ## Test it
 
 ```sh
 node scripts/check-permissions.js   # the resolution engine
 node scripts/check-jwt.js           # token verification — you implement this
 node scripts/check-api.js           # the HTTP contract
+node scripts/pentest.js             # the adversary's view — see "Run it" above
 npx playwright test                 # the console contract
 ```
 
