@@ -48,35 +48,111 @@ export function issueAccessToken({ userId, orgId, role, permVersion }, secret) {
 }
 
 // ---------------------------------------------------------------------------
-// TODO — yours to implement.
+// The verifying half. `node scripts/check-jwt.js` is the suite.
 //
-// Verify an access token and return its claims, or throw `unauthenticated(...)`.
-// The signing half above is done for you; the verifying half is the exercise.
+// Design notes, because two of these choices are load-bearing:
 //
-// It must reject ALL of the following, each with a 401 UNAUTHENTICATED:
+//  - The header is DATA, never a decision. I compare `header.alg` against my own ALG constant
+//    and refuse anything else, rather than switching on what the header asks for. A denylist
+//    (`alg !== 'none' && alg !== 'HS256'`) has to be updated every time a new algorithm exists;
+//    an allowlist of exactly one value cannot be defeated by a header I have not thought about.
 //
-//   1. a token that is not three dot-separated segments
-//   2. a header or payload that is not valid base64url-encoded JSON
-//   3. a header whose `alg` is anything other than 'HS256', or whose `typ` is not 'JWT'
-//      -- read the header, do NOT trust it. This is the `alg: none` and
-//         algorithm-substitution defence. The constants ALG, ISS and AUD are above.
-//   4. a signature that does not match, compared in constant time
-//   5. an `exp` that is missing, not a number, or <= now (note: <=, not <)
-//   6. an `iss` or `aud` that is not ours
-//   7. a missing or empty `jti`
-//
-// On success, return the decoded claims object.
-//
-// AUTH-DATA-MODEL.md §10 lists the failure modes; §2 defines the claim set.
-// `node scripts/check-jwt.js` is the public test suite for this function.
+//  - Every rejection carries the SAME client-facing message, and puts the specific cause on a
+//    non-serialised `detail` property. `sendError` only copies status/code/message/reason, so the
+//    cause reaches the server log and never the response. Telling an attacker *which* check
+//    failed turns the verifier into an oracle for forging one; keeping it internally is what
+//    makes a 401 debuggable without being informative to the caller.
 // ---------------------------------------------------------------------------
+
+// base64url, and nothing else. Buffer.from(_, 'base64url') silently DISCARDS characters outside
+// the alphabet, so a segment of '!!!not-base64!!!' would decode to a short buffer and only fail
+// later on a length comparison. Testing the segment first turns that into an explicit refusal.
+const B64URL = /^[A-Za-z0-9_-]+$/;
+
+function reject(detail) {
+  const err = unauthenticated('invalid access token');
+  err.detail = detail; // server-side only — sendError does not serialise it
+  return err;
+}
+
+// Returns { ok, value, why }. A segment is only usable if it is base64url, decodes to UTF-8,
+// parses as JSON, and is a JSON OBJECT — `null`, an array, a number and a bare string are all
+// refused, because every field read below assumes an object.
+function decodeSegment(segment) {
+  if (!B64URL.test(segment)) return { ok: false, why: `${segment.length}-char segment is not base64url` };
+
+  let text;
+  try {
+    text = unb64(segment).toString('utf8');
+  } catch {
+    return { ok: false, why: 'segment does not decode as utf-8' };
+  }
+
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return { ok: false, why: 'segment is not JSON' };
+  }
+
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, why: 'segment is JSON but not an object' };
+  }
+
+  return { ok: true, value };
+}
+
+const isNonEmptyString = (v) => typeof v === 'string' && v.length > 0;
+
 export function verifyAccessToken(token, secret) {
-  // YOURS TO WRITE. Every failure mode listed above must be a 401 UNAUTHENTICATED.
-  // `node scripts/check-jwt.js` is the public suite for this function.
-  throw Object.assign(
-    new Error('TODO: server/auth.js — verifyAccessToken() is yours to write (AUTH-DATA-MODEL.md §10).'),
-    { code: 'NOT_IMPLEMENTED' }
-  );
+  // 1. shape. Covers null, undefined, '', an opaque refresh token, and a refresh token that
+  //    happens to contain a dot — none of them are three segments.
+  if (!isNonEmptyString(token)) throw reject('token is not a non-empty string');
+  const parts = token.split('.');
+  if (parts.length !== 3) throw reject(`${parts.length} segments, expected 3`);
+  const [encodedHeader, encodedPayload, signature] = parts;
+  if (!encodedHeader || !encodedPayload || !signature) throw reject('empty segment');
+
+  // 2. header: parse, then pin the algorithm. Nothing below reads `alg` again.
+  const header = decodeSegment(encodedHeader);
+  if (!header.ok) throw reject(`header ${header.why}`);
+  if (header.value.alg !== ALG) throw reject(`alg is ${JSON.stringify(header.value.alg)}, not ${ALG}`);
+  if (header.value.typ !== 'JWT') throw reject(`typ is ${JSON.stringify(header.value.typ)}, not JWT`);
+
+  // 3. signature, over the exact bytes that were sent, in constant time. This happens BEFORE
+  //    any claim is trusted, so a swapped payload with a replayed signature is refused here and
+  //    never reaches claim validation.
+  const expected = createHmac('sha256', secret).update(`${encodedHeader}.${encodedPayload}`).digest();
+  const actual = unb64(signature);
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+    throw reject('signature does not match');
+  }
+
+  // 4. now the payload is authentic, so its claims can be believed.
+  const decoded = decodeSegment(encodedPayload);
+  if (!decoded.ok) throw reject(`payload ${decoded.why}`);
+  const claims = decoded.value;
+
+  // Half-open, like a grant window (D7): exp == now is already expired.
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof claims.exp !== 'number' || !Number.isFinite(claims.exp)) {
+    throw reject(`exp is ${JSON.stringify(claims.exp)}, not a number`);
+  }
+  if (claims.exp <= now) throw reject(`exp ${claims.exp} <= now ${now}`);
+
+  if (claims.iss !== ISS) throw reject(`iss is ${JSON.stringify(claims.iss)}`);
+  if (claims.aud !== AUD) throw reject(`aud is ${JSON.stringify(claims.aud)}`);
+  if (!isNonEmptyString(claims.jti)) throw reject('jti missing or empty');
+
+  // The four claims the request pipeline cannot work without. issueAccessToken always sets
+  // them, so requiring them costs nothing and stops a hand-rolled token with no `org` from
+  // being read as "the empty org", which would be a scoping bug rather than a 401.
+  if (!isNonEmptyString(claims.sub)) throw reject('sub missing or empty');
+  if (!isNonEmptyString(claims.org)) throw reject('org missing or empty');
+  if (!isNonEmptyString(claims.role)) throw reject('role missing or empty');
+  if (!Number.isInteger(claims.pv)) throw reject(`pv is ${JSON.stringify(claims.pv)}, not an integer`);
+
+  return claims;
 }
 
 

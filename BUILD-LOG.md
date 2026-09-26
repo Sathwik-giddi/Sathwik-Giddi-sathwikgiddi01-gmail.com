@@ -63,8 +63,54 @@ that `roles.rank` has five members. `roleRanks()` reads the table.
 
 ## Phase 1 — token verification
 
-_What did you expect each failure mode to look like before you ran it? Which one behaved
-differently from your expectation, and what did that tell you?_
+_Wrote `verifyAccessToken` in `server/auth.js:50-142`. `check-jwt.js` went 0/43 → 43/43 on the
+first run, which made me suspicious rather than pleased, so I went looking for the cases where
+my implementation could pass for the wrong reason._
+
+### The failure I did not predict: a malformed signature was going to be a 500
+
+Before writing the signature comparison I assumed a non-base64url signature would fail loudly.
+It does not. Two measurements:
+
+```
+decoded '!!!not-base64!!!' -> 7 bytes "9e8b7e6dab1eeb"      // Buffer.from(_, 'base64url') did not throw
+timingSafeEqual(4 bytes, 32 bytes) -> RangeError: Input buffers must have the same byte length
+```
+
+`Buffer.from(x, 'base64url')` **silently discards** every character outside the alphabet, so
+`'!!!not-base64!!!'` decodes to 7 bytes instead of raising. And `timingSafeEqual` throws a
+`RangeError` when the lengths differ, which `sendError` maps to `500 INTERNAL`, not `401`. So the
+three short-signature cases — `signature truncated`, `signature empty`, `signature is not
+base64url` — would each have been a **500 on an authentication path** with a guard written the
+obvious way (`timingSafeEqual(unb64(sig), expected)` inside a try).
+
+Fixed by refusing the segment on its characters *before* decoding
+(`B64URL = /^[A-Za-z0-9_-]+$/`, `auth.js:63`) and by comparing lengths before `timingSafeEqual`
+(`auth.js:104`). This is the same class of bug as the `PRAGMA foreign_keys` trap the README
+warns about: the check that is supposed to refuse the bad thing is not the check that runs.
+
+### One client-facing message, seven internal causes
+
+Every rejection throws `unauthenticated('invalid access token')` and hangs the specific cause on
+`err.detail`, which `sendError` does not serialise. I wanted the log to be debuggable, and I did
+not want a 401 that says *which* check failed — that is an oracle for whoever is trying to forge
+one. Verified the property is real rather than assumed: `sendError` (`server/http.js:52`) copies
+only `status`, `code`, `message` and `reason`.
+
+### What I added beyond the seven listed failure modes
+
+The stub lists seven. I also require `sub`, `org`, `role` to be non-empty strings and `pv` to be
+an integer, because `authenticate()` reads all four and a token with `org` absent would otherwise
+be read as "the empty org" — a scoping bug rather than a 401. `issueAccessToken` always sets them,
+so this cannot reject a token the server minted.
+
+### Order is the decision, not the checks
+
+Signature before claims. `check-jwt.js:111` (`payload swapped, old signature kept`) is the case
+that forces it: the swapped payload is perfectly well-formed and unexpired, so a verifier that
+reads claims first would sail through it on the `exp` check and only trip on the signature later.
+The suite passes either way; I put the signature first because the only safe time to trust a
+claim is after the bytes carrying it are authenticated.
 
 ## Phase 2 — caller context and the resolution engine
 
