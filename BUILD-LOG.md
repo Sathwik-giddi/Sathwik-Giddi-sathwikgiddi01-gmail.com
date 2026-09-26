@@ -805,6 +805,44 @@ while tidying unused imports — so it was a `ReferenceError` and a `500`. Caugh
 the new tests, which is the argument for writing the test in the same commit as the fix: the fix
 and its regression test were never both green at the same time otherwise.
 
+### 9. The half of the presence rule nobody notices is missing
+
+`UI-INVENTORY.md §1` says a rendered gated element carries `data-permission` and
+`data-state="unlocked"`. I had **eight** elements that were correctly present-or-absent and carried
+neither. The presence was right, which is why the shipped suite passed and why I never looked: it
+asserts `[data-permission="device:control"]` inside a device row, and the two places that matter
+most happened to be annotated.
+
+The fix is structural rather than eight edits. `IfAllowed` now attaches the attributes by cloning
+its child, so a ninth cannot be added without them. And writing the test for it immediately paid for
+itself twice:
+
+- **`cloneElement` cannot reach inside a composite.** `role-select` was wrapped in `IfAllowed` in
+  the parent, so the attributes were cloned onto the `<RolePicker>` *component*, which drops props
+  it does not forward — the `<select>` rendered with no attributes at all. `RolePicker` now gates
+  itself, so the clone lands on a host element. **A wrapper that annotates its child is only a
+  guarantee about host elements**, and I had assumed it was a guarantee about all of them.
+- **Six device buttons had no `data-testid` at all.** `start-view`, `start-control`,
+  `start-terminal`, `transfer-files`, `rename-device`, `decommission-device` are named in the
+  inventory; I had implemented the permission gating and the provenance and never the test ids, so
+  the six entries were unaddressable by the contract. `suspend-user` and `remove-user` were the same.
+
+Both were found by `tests/contract.spec.js`, which asserts the attributes on the **rendered DOM**
+against a table transcribed from `UI-INVENTORY.md` rather than from my own components — so the
+inventory and the console cannot drift without a test failing.
+
+I also had to fix the test twice before it was worth having. `test.skip()` inside a loop skips the
+**whole test**, not the one assertion, so my first version skipped itself and never ran a single
+check while reporting as a skip. And my "nothing should be absent" assertion was nonsense: a
+`device-row` is not supposed to appear on the People card. It now checks each element on its own
+card and asserts how many checks ran, so a console that stopped rendering entirely cannot pass by
+asserting nothing.
+
+`session-row` also overloaded `data-state` for the session *lifecycle* while `data-state` means
+`unlocked` everywhere else in the console. One attribute, two meanings, and a selector like
+`[data-state="unlocked"]` scoped to a card would quietly match the wrong thing. The lifecycle moved
+to `data-session-state`.
+
 ### The pattern across all three
 
 Every one is a check I ran, and none of them was a check that could fail. I asserted the 401 and

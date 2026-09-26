@@ -104,7 +104,9 @@ function DeviceRow({ orgId, device, busy, run, onError }) {
   const fromGrants = Object.entries(p).filter(([, v]) => v.source?.startsWith('grant:'));
 
   return (
-    <tr data-testid="device-row" data-device-id={device.id} data-kind={device.kind}>
+    // The row is governed by device:view (UI-INVENTORY §3). The row only exists at all when that
+    // permission is held, because the server omits the row otherwise — so it is always "unlocked".
+    <tr data-testid="device-row" data-device-id={device.id} data-kind={device.kind} data-permission="device:view" data-state="unlocked">
       <td>
         <div className="cell-name">{device.name}</div>
         <div className="cell-sub">
@@ -136,27 +138,27 @@ function DeviceRow({ orgId, device, busy, run, onError }) {
           </>
         ) : (
           <>
-            <PermButton permissions={p} permission="device:view" title={`View ${device.name} · ${provenance(verdict(p, 'device:view'))}`}
+            <PermButton permissions={p} permission="device:view" data-testid="start-view" title={`View ${device.name} · ${provenance(verdict(p, 'device:view'))}`}
               onClick={() => run(`view-${device.id}`, () => api.startSession(orgId, device.id, 'view').catch(rejectBusy(orgId, onError)))}>
               View
             </PermButton>
-            <PermButton permissions={p} permission="device:control" title={`Control ${device.name} · ${provenance(verdict(p, 'device:control'))}`}
+            <PermButton permissions={p} permission="device:control" data-testid="start-control" title={`Control ${device.name} · ${provenance(verdict(p, 'device:control'))}`}
               onClick={() => run(`control-${device.id}`, () => api.startSession(orgId, device.id, 'control').catch(rejectBusy(orgId, onError)))}>
               Control
             </PermButton>
-            <PermButton permissions={p} permission="device:terminal" title={`Terminal ${device.name} · ${provenance(verdict(p, 'device:terminal'))}`}
+            <PermButton permissions={p} permission="device:terminal" data-testid="start-terminal" title={`Terminal ${device.name} · ${provenance(verdict(p, 'device:terminal'))}`}
               onClick={() => run(`terminal-${device.id}`, () => api.startSession(orgId, device.id, 'terminal').catch(rejectBusy(orgId, onError)))}>
               Terminal
             </PermButton>
-            <PermButton permissions={p} permission="device:file_transfer" title={`Transfer files · ${provenance(verdict(p, 'device:file_transfer'))}`}
+            <PermButton permissions={p} permission="device:file_transfer" data-testid="transfer-files" title={`Transfer files · ${provenance(verdict(p, 'device:file_transfer'))}`}
               onClick={() => run(`xfer-${device.id}`, () => startTransfer(orgId, device))}>
               Transfer files
             </PermButton>
-            <PermButton permissions={p} permission="device:update" title={`Rename · ${provenance(verdict(p, 'device:update'))}`}
+            <PermButton permissions={p} permission="device:update" data-testid="rename-device" title={`Rename · ${provenance(verdict(p, 'device:update'))}`}
               onClick={() => { setName(device.name); setRenaming(true); }}>
               Rename
             </PermButton>
-            <PermButton permissions={p} permission="device:provision" title={`Decommission · ${provenance(verdict(p, 'device:provision'))}`}
+            <PermButton permissions={p} permission="device:provision" data-testid="decommission-device" title={`Decommission · ${provenance(verdict(p, 'device:provision'))}`}
               className="danger"
               onClick={() => run(`decom-${device.id}`, async () => {
                 if (!window.confirm(`Decommission ${device.name}? It stops responding to sessions.`)) return;
@@ -217,7 +219,9 @@ export function PeopleCard({ orgId, orgPermissions, members, onReload, onError, 
       {inviting && (
         <div className="inline-form">
           <input placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} aria-label="invite email" />
-          <RolePicker permissions={orgPermissions} value={role} onChange={setRole} label="invite role" />
+          {/* Already inside an IfAllowed for `user:invite`; passing `permissions` lets this one
+              annotate its own <select> too, rather than relying on a clone that cannot reach it. */}
+          <RolePicker permissions={orgPermissions} permission="user:invite" value={role} onChange={setRole} label="invite role" />
           <button
             className="btn btn--primary"
             disabled={busy === 'invite' || email.trim() === ''}
@@ -247,39 +251,55 @@ export function PeopleCard({ orgId, orgPermissions, members, onReload, onError, 
         </thead>
         <tbody>
           {members.map((m) => (
-            <tr key={m.user_id} data-testid="user-row" data-user-id={m.user_id} data-role={m.role} data-status={m.status}>
+            // Governed by user:read (UI-INVENTORY §3). Rows are annotated explicitly rather than
+            // through IfAllowed: the card is already gated, so every row is unconditionally
+            // unlocked, and wrapping fifty rows in a helper that clones an element would cost more
+            // than it explains.
+            <tr
+              key={m.user_id}
+              data-testid="user-row"
+              data-permission="user:read"
+              data-state="unlocked"
+              data-user-id={m.user_id}
+              data-role={m.role}
+              data-status={m.status}
+            >
               <td>
                 <div className="cell-name">{m.name}{m.user_id === meId && <span className="tag tag--you">you</span>}</div>
                 <div className="cell-sub"><code>{m.email}</code></div>
               </td>
               <td>
-                <IfAllowed permissions={orgPermissions} permission="user:role:update">
-                  <RolePicker
-                    permissions={orgPermissions}
-                    value={m.role}
-                    userId={m.user_id}
-                    disabled={busy === `role-${m.user_id}`}
-                    onChange={(next) => run(`role-${m.user_id}`, () => api.setRole(orgId, m.user_id, next))}
-                    label={`role for ${m.name}`}
-                  />
-                </IfAllowed>
+                {/* RolePicker gates ITSELF rather than being wrapped. `IfAllowed` attaches the
+                    contract attributes by cloning its child, and cloning a composite component
+                    drops any prop that component does not forward — so wrapping RolePicker
+                    produced a <select> with no data-permission at all. A host element is the only
+                    thing cloneElement can reliably annotate. */}
+                <RolePicker
+                  permissions={orgPermissions}
+                  permission="user:role:update"
+                  value={m.role}
+                  userId={m.user_id}
+                  disabled={busy === `role-${m.user_id}`}
+                  onChange={(next) => run(`role-${m.user_id}`, () => api.setRole(orgId, m.user_id, next))}
+                  label={`role for ${m.name}`}
+                />
                 {!allows(orgPermissions, 'user:role:update') && <span className="tag">{m.role}</span>}
               </td>
               <td><span className={`tag tag--${m.status}`}>{m.status}</span></td>
               <td className="actions">
                 <IfAllowed permissions={orgPermissions} permission="user:remove">
                   {m.status === 'suspended' ? (
-                    <PermButton permissions={orgPermissions} permission="user:remove"
+                    <PermButton permissions={orgPermissions} permission="user:remove" data-testid="suspend-user"
                       onClick={() => run(`susp-${m.user_id}`, () => api.reinstateMember(orgId, m.user_id))}>
                       Reinstate
                     </PermButton>
                   ) : (
-                    <PermButton permissions={orgPermissions} permission="user:remove"
+                    <PermButton permissions={orgPermissions} permission="user:remove" data-testid="suspend-user"
                       onClick={() => run(`susp-${m.user_id}`, () => api.suspendMember(orgId, m.user_id))}>
                       Suspend
                     </PermButton>
                   )}
-                  <PermButton permissions={orgPermissions} permission="user:remove" className="danger"
+                  <PermButton permissions={orgPermissions} permission="user:remove" className="danger" data-testid="remove-user"
                     onClick={() => run(`rm-${m.user_id}`, async () => {
                       if (!window.confirm(`Remove ${m.name} from this organization?`)) return;
                       await api.removeMember(orgId, m.user_id);
@@ -301,7 +321,7 @@ export function PeopleCard({ orgId, orgPermissions, members, onReload, onError, 
  * the server's reference data, so a role that exists only in the graded fixture's database appears
  * here without any code change. Never a hardcoded list of five.
  */
-function RolePicker({ value, onChange, disabled, label, userId }) {
+function RolePicker({ permissions, permission = 'user:role:update', value, onChange, disabled, label, userId }) {
   const [roles, setRoles] = useState([]);
   React.useEffect(() => {
     let live = true;
@@ -312,17 +332,19 @@ function RolePicker({ value, onChange, disabled, label, userId }) {
   }, []);
 
   return (
-    <select
-      className="select"
-      data-testid="role-select"
-      data-user-id={userId}
-      aria-label={label}
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {roles.map((r) => <option key={r.key} value={r.key}>{r.label ?? r.key}</option>)}
-    </select>
+    <IfAllowed permissions={permissions} permission={permission}>
+      <select
+        className="select"
+        data-testid="role-select"
+        data-user-id={userId}
+        aria-label={label}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {roles.map((r) => <option key={r.key} value={r.key}>{r.label ?? r.key}</option>)}
+      </select>
+    </IfAllowed>
   );
 }
 
@@ -385,7 +407,14 @@ export function GrantsCard({ orgId, orgPermissions, grants, members, devices, on
           </thead>
           <tbody>
             {grants.map((g) => (
-              <tr key={g.id} data-testid="grant-row" data-effect={g.effect} data-grant-id={g.id}>
+              <tr
+                key={g.id}
+                data-testid="grant-row"
+                data-permission="user:read"
+                data-state="unlocked"
+                data-effect={g.effect}
+                data-grant-id={g.id}
+              >
                 <td>
                   <div className="cell-name">{g.user_name ?? g.user_id}</div>
                   <div className="cell-sub"><code>{g.id}</code></div>
@@ -578,7 +607,19 @@ export function SessionsCard({ orgId, orgPermissions, sessions, devices, onReloa
           </thead>
           <tbody>
             {sessions.map((s) => (
-              <tr key={s.id} data-testid="session-row" data-session-id={s.id} data-mode={s.mode} data-state={s.state}>
+              // `data-state` means "unlocked" everywhere else in this console (UI-INVENTORY §1), so
+              // the session LIFECYCLE gets its own attribute. Overloading one name for two meanings
+              // is how a selector like `[data-state="unlocked"]` silently starts matching the wrong
+              // thing. The row's governing permission is session:view, which gates the whole card.
+              <tr
+                key={s.id}
+                data-testid="session-row"
+                data-permission="session:view"
+                data-state="unlocked"
+                data-session-id={s.id}
+                data-mode={s.mode}
+                data-session-state={s.state}
+              >
                 <td>
                   <div className="cell-name">{s.user_name ?? s.user_id}</div>
                   {s.authorized_by?.grantIds?.length > 0 && (
@@ -599,6 +640,10 @@ export function SessionsCard({ orgId, orgPermissions, sessions, devices, onReloa
                   {/* Your own session, or session:terminate. The server decides which applies and
                       the button carries the permission it was rendered for, so a hidden button here
                       is a real absence rather than a disabled control. */}
+                  {/* Governed by OWNERSHIP, not by a permission (UI-INVENTORY §3: "your own
+                      session"), so it carries no data-permission — there is no permission to name.
+                      It is still gated: the server decides, and `can_stop` in the list response is
+                      the server's own answer. */}
                   {s.state === 'active' && s.is_mine && (
                     <button data-testid="stop-session" data-session-id={s.id} className="perm"
                       onClick={() => run(`stop-${s.id}`, () => api.stopSession(s.id))}>Stop</button>
@@ -643,7 +688,14 @@ export function AuditCard({ events, total, onError }) {
             </thead>
             <tbody>
               {events.map((e) => (
-                <tr key={e.id} data-testid="audit-row" data-result={e.result} data-action={e.action}>
+                <tr
+                  key={e.id}
+                  data-testid="audit-row"
+                  data-permission="audit:read"
+                  data-state="unlocked"
+                  data-result={e.result}
+                  data-action={e.action}
+                >
                   <td className="cell-sub">{fmtTime(e.at)}</td>
                   <td>{e.actor_name ?? e.actor_id ?? '—'}</td>
                   <td><code>{e.action}</code></td>

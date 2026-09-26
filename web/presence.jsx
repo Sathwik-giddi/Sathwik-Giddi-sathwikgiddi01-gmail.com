@@ -1,3 +1,4 @@
+import React, { cloneElement, isValidElement } from 'react';
 // The presence primitives.
 //
 // This file is the whole of the console's permission model, and it is four functions long on
@@ -25,11 +26,29 @@ export const verdict = (permissions, key) => permissions?.[key] ?? null;
  * Render `children` only when the permission is held. This is the presence rule in one place —
  * every permission-gated element in the console goes through it, so there is exactly one place to
  * look when asking "why is this button here?".
+ *
+ * It also ATTACHES the two contract attributes to whatever it renders, by cloning the child. That
+ * is not tidiness: `UI-INVENTORY.md §1` requires a rendered gated element to carry
+ * `data-permission` and `data-state="unlocked"`, and I had written eight of them that were
+ * correctly present-or-absent and carried neither attribute — the presence was right and the
+ * contract was not, which is the half of the rule nobody notices is missing. Making the helper do
+ * it means a ninth cannot be added without them.
+ *
+ * For an `anyOf` gate (the Admin card is `org:update` OR `org:delete`) the attribute names the
+ * permission the caller ACTUALLY holds, not the first one listed, so `data-permission` is a true
+ * statement about why the element is on the page.
  */
 export function IfAllowed({ permissions, permission, anyOf, children }) {
-  const held = anyOf ? allowsAny(permissions, anyOf) : allows(permissions, permission);
+  const candidates = anyOf ?? [permission];
+  const held = candidates.find((key) => allows(permissions, key));
   if (!held) return null;
-  return children;
+
+  if (!isValidElement(children)) return children;
+
+  return cloneElement(children, {
+    'data-permission': children.props['data-permission'] ?? held,
+    'data-state': 'unlocked',
+  });
 }
 
 /**
