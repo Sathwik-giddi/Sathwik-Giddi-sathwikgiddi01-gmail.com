@@ -11,7 +11,7 @@
 // Steps 1 and 2 produce byte-identical bodies, because a 403 on a resource in another org would
 // confirm that resource exists.
 
-import { send, notFound, badRequest, conflict, selfRoleChange } from '../http.js';
+import { send, notFound, badRequest, conflict, selfRoleChange, HttpError } from '../http.js';
 import { assertSameOrg } from '../context.js';
 import { stmt } from '../internal/sql.js';
 import { newId, nowIso } from '../db.js';
@@ -49,6 +49,25 @@ export function register(router) {
     // does not change colour under the user, and two orgs never collide on an accent by accident
     // of the clock.
     const theme = requested ?? THEMES[Math.abs([...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) | 0, 7)) % THEMES.length];
+    // `PERMISSIONS.md §5` lists `CONFLICT | 409 | duplicate name`, and no submission can produce
+    // that code from the schema: `organizations.name` carries no UNIQUE index (the only unique
+    // indexes in db/schema.sql are roles.rank, users.email, invites.token_hash, memberships(org,user),
+    // and the two partial ones). So it cannot be a database guarantee, and BRIEF.md §2 says the
+    // schema wins. But a documented code that no implementation can ever emit is a code nobody
+    // should have written, so this is an APPLICATION check: racy under two simultaneous creates,
+    // which is a far smaller problem than never emitting the documented status at all. The race is
+    // stated in DECISIONS.md rather than hidden, and the case it does not cover -- two orgs with
+    // the same name created at the same instant -- is a cosmetic duplicate, not a security one.
+    const clash = ctx.db.prepare(
+      'SELECT id FROM organizations WHERE name = ? COLLATE NOCASE AND deleted_at IS NULL AND id <> ?'
+    ).get(name, ctx.orgId);
+    if (clash) {
+      // Built directly rather than via `conflict(msg, code)`, whose second argument is the CODE and
+      // which leaves `reason` null. The documented code is `CONFLICT` and the specific cause belongs
+      // in `reason`, so both fields carry what they are for.
+      throw new HttpError(409, 'CONFLICT', `an organization called ${JSON.stringify(name)} already exists`, 'duplicate_name');
+    }
+
     const id = newId('org');
 
     const create = ctx.db.transaction(() => {
@@ -143,8 +162,11 @@ export function register(router) {
       // an admin changing their own role is a different mistake from an admin changing a peer.
       if (params.userId === ctx.userId) throw selfRoleChange();
 
+      // `membershipByOrgUser` ignores status, so this used to accept a REMOVED membership and
+      // stage a role on it — authority pre-loaded for a person who is not in the org, waiting for
+      // whoever reinstates them. Only an active or suspended membership is addressable here.
       const target = stmt(ctx.db, 'membershipByOrgUser').get(params.org, params.userId);
-      if (!target) throw notFound();
+      if (!target || target.status === 'removed') throw notFound();
 
       const newRole = requireString(ctx.body.role, 'role', { max: 40 });
       assertRoleExists(ctx.db, newRole);
@@ -250,10 +272,10 @@ export function register(router) {
     return auditDenials(ctx.db, ctx, { action: 'member.remove', targetType: 'user', targetId: params.userId }, () => {
       ctx.resolver.assertCan('user:remove');
       // Same reasoning as self-suspend: one code for 'you cannot do this to yourself'.
-      if (params.userId === ctx.userId) throw selfRoleChange();
+      if (params.userId === ctx.userId) throw new HttpError(403, 'SELF_ROLE_CHANGE', 'use the self-leave endpoint to leave an organization');
 
       const target = stmt(ctx.db, 'membershipByOrgUser').get(params.org, params.userId);
-      if (!target) throw notFound();
+      if (!target || target.status === 'removed') throw notFound();
       assertCanModify(ctx.db, ctx.role, target.role);
       if (target.role === 'owner') assertNotLastOwner(ctx.db, params.org, params.userId);
 

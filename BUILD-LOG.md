@@ -981,6 +981,49 @@ rather than a spinner.
 - **Self-suspend and self-remove returned 400** while self-role-change returned 403. One family of
   mistake gets one answer now.
 
+### 16. A documented code no implementation could emit
+
+`PERMISSIONS.md §5`'s table has a row for `CONFLICT | 409 | duplicate name`. **No submission can
+produce it**, including mine until this commit: `organizations.name` carries no UNIQUE index. The
+only unique indexes in `db/schema.sql` are `roles.rank`, `users.email`, `invites.token_hash`,
+`memberships(org_id, user_id)`, and the two partial ones. So it cannot be a database guarantee, and
+`BRIEF.md §2` says the schema wins.
+
+But a documented code that no implementation can ever emit is a code nobody should have written, so
+this is an **application** check — and I said so in the comment and in `DECISIONS.md` rather than
+leaving it to look structural. The race it does not cover is two orgs with the same name created in
+the same instant, and that is a cosmetic duplicate rather than a security one, which is the only
+reason I am comfortable shipping a check-then-act when the rest of this build refuses to.
+
+It is built as `new HttpError(409, 'CONFLICT', …, 'duplicate_name')` rather than through
+`conflict(msg, code)`, because **that helper's second argument is the code and it leaves `reason`
+null** — so the obvious call puts `duplicate_name` where the specification says `CONFLICT` belongs
+and leaves the reason empty. Same split as `GRANT_EXPIRED`/`expired_grant`: the documented value in
+the documented field, the specific cause alongside it.
+
+### 17. A 400 with `reason: null` is a 400 that says nothing
+
+Every validation failure went out as `VALIDATION` with a null reason, so a client could tell that
+something was wrong and nothing about what. The vocabulary is now small and shared —
+`missing_field`, `invalid_type`, `too_long`, `invalid_email`, `weak_password` — and
+`weak_password` is deliberately distinct from `missing_field`, because the remedy is different: one
+needs a value, the other needs a *longer* one.
+
+### The rest of the sweep
+
+- **`PATCH /members/:id` staged a role on a `removed` membership.** `membershipByOrgUser` ignores
+  status, so a role could be assigned to someone who is not in the organization — authority
+  pre-loaded, waiting for whoever reinstates them. Only `active` and `suspended` are addressable.
+- **Self-suspend and self-remove** now say *what* you cannot do to yourself rather than the generic
+  self-role-change text, while keeping the 403 and the documented code.
+- **An org switch made two requests instead of one.** The reset effect and the load effect ran in
+  the same commit, so `load()` fired once with the *previous* view's closure and again when `view`
+  changed — and the first one's data landed in a slot for a card that was no longer on screen.
+  Resetting `view` first makes the load that follows read the view it will actually render.
+- **A comment in `routes/index.js` named a route that does not exist.** It said
+  `POST /members/me` when the real self-leave is a `DELETE`; the *ordering* it warned about was
+  right and the *name* was wrong, which is worse than neither.
+
 ### The pattern across all three
 
 Every one is a check I ran, and none of them was a check that could fail. I asserted the 401 and

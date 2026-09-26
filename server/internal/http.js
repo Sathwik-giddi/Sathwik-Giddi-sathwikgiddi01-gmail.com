@@ -87,10 +87,17 @@ export const LIMITS = Object.freeze({
   limitDefault: 50,
 });
 
+/**
+ * A required string. Every refusal carries a `reason`, because a 400 with `reason: null` tells a
+ * client that something was wrong and nothing about what. The reason vocabulary is small and
+ * shared: `missing_field`, `invalid_type`, `too_long`. These were `null` before, and the only two
+ * places in the console where a failure produced no explanation were downstream of exactly this.
+ */
 export function requireString(value, field, { max = LIMITS.name, min = 1 } = {}) {
-  if (typeof value !== 'string') throw badRequest(`${field} is required`);
+  if (value === undefined || value === null) throw badRequest(`${field} is required`, 'missing_field');
+  if (typeof value !== 'string') throw badRequest(`${field} must be a string`, 'invalid_type');
   const trimmed = value.trim();
-  if (trimmed.length < min) throw badRequest(`${field} is required`);
+  if (trimmed.length < min) throw badRequest(`${field} is required`, 'missing_field');
   if (trimmed.length > max) throw badRequest(`${field} must be at most ${max} characters`, 'too_long');
   return trimmed;
 }
@@ -108,9 +115,12 @@ export function requireEmail(value) {
 }
 
 export function requirePassword(value) {
-  if (typeof value !== 'string') throw badRequest('password is required');
-  if (value.length < LIMITS.password) throw badRequest(`password must be at least ${LIMITS.password} characters`);
-  if (value.length > LIMITS.passwordMax) throw badRequest('password is too long');
+  if (value === undefined || value === null) throw badRequest('password is required', 'missing_field');
+  if (typeof value !== 'string') throw badRequest('password must be a string', 'invalid_type');
+  // `weak_password` is a distinct reason from `missing_field` because the remedy is different: one
+  // needs a value, the other needs a LONGER one.
+  if (value.length < LIMITS.password) throw badRequest(`password must be at least ${LIMITS.password} characters`, 'weak_password');
+  if (value.length > LIMITS.passwordMax) throw badRequest('password is too long', 'too_long');
   return value;
 }
 

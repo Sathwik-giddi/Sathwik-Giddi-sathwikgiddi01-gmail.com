@@ -12,14 +12,15 @@
 //   devices.js   devices, transfer, grants, and the reference data the console's forms need
 //   sessions.js  sessions
 //
-// Two ordering constraints are load-bearing rather than cosmetic:
+// One ordering constraint is load-bearing rather than cosmetic:
 //
-//   1. `POST /v1/orgs/:org/members/me` is registered BEFORE `DELETE /v1/orgs/:org/members/:userId`
-//      would match it, because the router returns the first match and `/members/me` would
-//      otherwise be read as a userId of "me" — which would 404 for a caller who is, in fact,
-//      trying to leave.
-//   2. Everything else is order-independent, because `assertSameOrg` is the first line of every
-//      org-scoped handler rather than something the router does.
+//   `DELETE /v1/orgs/:org/members/me` is registered BEFORE `DELETE /v1/orgs/:org/members/:userId`.
+//   The router returns the first match, both are five segments with the same method, and `:userId`
+//   would otherwise match the literal string "me" — so leaving an organization would 404 for a
+//   caller who is, in fact, trying to leave. I got this wrong once and the shipped suite caught it.
+//
+// Everything else is order-independent, because `assertSameOrg` is the first line of every
+// org-scoped handler rather than something the router does.
 
 import * as auth from './auth.js';
 import * as orgs from './orgs.js';
@@ -29,9 +30,6 @@ import * as sessions from './sessions.js';
 
 export function registerRoutes(router, deps) {
   const { db, secret } = deps;
-  void db;
-  void secret;
-
   auth.register(router, { db, secret });
   orgs.register(router, { db, secret });
   invites.register(router, { db, secret });

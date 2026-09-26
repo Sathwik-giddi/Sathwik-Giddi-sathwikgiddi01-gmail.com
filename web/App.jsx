@@ -165,11 +165,17 @@ function Shell({ me, onReload, onSignOut }) {
 
   // Everything from the previous organization goes at once, on every org change. Not a filter, a
   // reset — which is why org A's device ids cannot survive into org B's DOM.
+  //
+  // `load` is a dependency, so this also collapses the duplicate fetch an org switch used to make:
+  // the reset and the load both ran in the same commit, `load()` fired once with the PREVIOUS
+  // view's closure and then again when `view` changed. Two requests per switch, and the second
+  // one's data landed in a slot for a card that was no longer on screen. Resetting `view` first
+  // means the load that follows reads the view it is actually going to render.
   useEffect(() => {
-    setData({ devices: null, members: null, grants: null, sessions: null, audit: null });
     setView('devices');
     setAuditPage(0);
     setError(null);
+    setData({ devices: null, members: null, grants: null, sessions: null, audit: null });
   }, [orgId]);
 
   // Fetch the active view. Re-runs whenever the view OR the org changes, so a nav click is always a

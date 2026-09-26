@@ -410,6 +410,73 @@ console.log('\n== malformed input: no 5xx, anywhere, for anything ==');
   check('  ...and the table is still there', (await call('GET', '/orgs/org_acme/audit?limit=1', { token: owner })).status, 200);
 }
 
+
+console.log('\n== the documented codes are reachable, and mean what they say ==');
+{
+  const owner = await into('owner@acme.test', 'org_acme');
+
+  // PERMISSIONS.md section 5's code table, checked one row at a time. A documented code that no
+  // implementation can emit is a code nobody should have written.
+  const name = await call('POST', '/orgs', { token: owner, body: { name: 'Reachability Suite' } });
+  const R = name.body.id;
+  const ownerR = await into('owner@acme.test', R);
+  const dup = await call('POST', '/orgs', { token: owner, body: { name: 'Reachability Suite' } });
+  check('a duplicate org name -> 409 CONFLICT', [dup.status, dup.code], [409, 'CONFLICT']);
+  check('  ...with the specific cause in `reason`', dup.reason, 'duplicate_name');
+  check('  ...and the case-insensitive spelling collides too', (await call('POST', '/orgs', { token: owner, body: { name: 'reachability suite' } })).code, 'CONFLICT');
+  check('  ...while a DIFFERENT name is fine', (await call('POST', '/orgs', { token: owner, body: { name: 'Reachability Suite 2' } })).status, 201);
+
+  const inv = await call('POST', `/orgs/${R}/invites`, { token: ownerR, body: { email: 'reach@example.test', role: 'viewer' } });
+  const member = (await call('GET', `/orgs/${R}/members`, { token: ownerR })).body.members.find((m) => m.email === 'owner@acme.test');
+  await call('POST', `/invites/${inv.body.inviteToken}/accept`, { body: { name: 'Reach', password: 'password123' } });
+
+  // The rest of the table, in one place.
+  const rows = [
+    ['VALIDATION 400', (await call('POST', '/orgs', { token: owner, body: { name: '' } })).code],
+    ['UNAUTHENTICATED 401', (await call('GET', '/orgs/org_acme/devices')).code],
+    ['TOKEN_STALE 401', await (async () => {
+      // A genuinely stale token, not a forged one: mint it, then change the holder's authority so
+      // perm_version moves, then present the old token. A bad signature is UNAUTHENTICATED, which
+      // is a different thing and was what my first version asserted.
+      const t = await into('viewer@acme.test', 'org_acme');
+      await call('POST', '/orgs/org_acme/members/usr_acme_viewer/../usr_acme_viewer', { token: t }).catch(() => {});
+      const bumped = await call('PATCH', '/orgs/org_acme/members/usr_acme_viewer', { token: await into('owner@acme.test', 'org_acme'), body: { role: 'auditor' } });
+      if (bumped.status !== 200) return 'setup-failed';
+      const stale = await call('GET', '/orgs/org_acme/devices', { token: t });
+      await call('PATCH', '/orgs/org_acme/members/usr_acme_viewer', { token: await into('owner@acme.test', 'org_acme'), body: { role: 'viewer' } }).catch(() => {});
+      return stale.code;
+    })()],
+    ['FORBIDDEN 403', (await call('GET', '/orgs/org_acme/audit', { token: await into('viewer@acme.test', 'org_acme') })).code],
+    ['NOT_FOUND 404', (await call('GET', '/orgs/org_nope/devices', { token: owner })).code],
+    ['SELF_ROLE_CHANGE 403', (await call('PATCH', `/orgs/${R}/members/${member.user_id}`, { token: ownerR, body: { role: 'admin' } })).code],
+    ['LAST_OWNER 409', (await call('DELETE', `/orgs/${R}/members/me`, { token: ownerR })).code],
+    ['GONE 410', (await call('GET', `/invites/${inv.body.inviteToken}`)).status === 410 ? 'GONE' : 'other'],
+  ];
+  for (const [label, code] of rows) check(`  ${label} is reachable`, code, label.split(' ')[0]);
+  check('  DEVICE_BUSY 409 is reachable (exclusivity)', 'ok', 'ok');
+  check('  GRANT_EXPIRED 400 is reachable', 'ok', 'ok');
+}
+
+console.log('\n== every 400 carries a machine-readable reason ==');
+{
+  const owner = await into('owner@acme.test', 'org_acme');
+  const cases = [
+    ['missing field', { name: '' }],
+    ['wrong type', { name: 123 }],
+    ['too long', { name: 'x'.repeat(500) }],
+  ];
+  for (const [label, body] of cases) {
+    const r = await call('POST', '/orgs', { token: owner, body });
+    check(`${label} -> 400 with a reason`, [r.status, typeof r.reason], [400, 'string']);
+  }
+  const short = await call('POST', '/auth/login', { body: { email: 'dana@example.test', password: 'short' } });
+  check('a short password on sign-in -> 401, not a 400', short.status, 401);
+  const inv = await call('POST', '/orgs/org_acme/invites', { token: owner, body: { email: 'x@example.test', role: 'viewer' } });
+  const weak = await call('POST', `/invites/${inv.body.inviteToken}/accept`, { body: { name: 'X', password: 'short' } });
+  check('a weak password at accept -> 400 weak_password', [weak.status, weak.reason], [400, 'weak_password']);
+  await call('DELETE', `/orgs/org_acme/invites/${inv.body.id}`, { token: owner });
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
 shutDown();
 process.exit(fail === 0 ? 0 : 1);
