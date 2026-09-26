@@ -1,13 +1,35 @@
 # BUILD-LOG
 
-Append to this as you go. Commit it with the code it describes — the timestamps are part of the
-evidence, and a log that arrives in one commit at the end reads as what it is.
+## How to run this
 
-Five lines is a real entry. Short and dated is better than long and reconstructed.
+```sh
+npm install
+npm run db:reset     # schema + reference data + demo fixture + the personalised overlay
+npm run dev          # http://localhost:8080  — one process, API and console
+```
 
-The categories we look for are listed in `DISCOVERY-BRIEF.md`. The example below shows the
-*shape* of a good entry; it is a recreation of something already printed in `README.md`, so it
-gives nothing away.
+Then sign in as `sam@example.test` / `demo1234` and switch between Acme Robotics and Globex
+Industries. She can control devices and cannot read the audit log in one; she can read the audit log
+and cannot control anything in the other. Same person, the two items swap.
+
+To run everything:
+
+```sh
+npm run check        # all six dependency-free suites, 371 assertions
+npx playwright install chromium   # once; the CDN is unreachable from some networks
+npm test             # builds the SPA (pretest), then the 25-case UI contract
+```
+
+`npm run check` needs only `better-sqlite3`. Two extras are mine and are not part of the graded
+contract: `npm run inspect` prints the resolved permission model for the loaded database with its
+provenance, and `npm run measure` counts executed statements per request and measures latency.
+
+Append each entry as you go, and commit it with the code it describes — the timestamps are part of
+the evidence, and a log that arrives in one commit at the end reads as what it is. Five lines is a
+real entry; short and dated beats long and reconstructed. The categories of event the brief looks
+for are listed in `DISCOVERY-BRIEF.md`.
+
+Entries below are in the order they happened, including the parts where I was wrong.
 
 ---
 
