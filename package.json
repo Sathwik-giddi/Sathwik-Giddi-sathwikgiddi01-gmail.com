@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Q1 — multi-org permission console. One process: node:http API + Vite/React SPA.",
+  "description": "Q1 \u2014 multi-org permission console. One process: node:http API + Vite/React SPA.",
   "scripts": {
     "dev": "node --watch-path=./server --watch server/index.js",
     "build": "vite build",
@@ -13,9 +13,11 @@
     "pretest": "vite build",
     "test": "playwright test",
     "test:ui": "playwright test --ui",
-    "check": "node scripts/check-jwt.js && node scripts/check-permissions.js && node scripts/check-personalisation.js && node scripts/check-api.js && node scripts/check-seams.js",
+    "check": "node scripts/check-jwt.js && node scripts/check-permissions.js && node scripts/check-personalisation.js && node scripts/check-api.js && node scripts/check-seams.js && node scripts/check-http-seams.js",
     "personalisation": "node scripts/check-personalisation.js",
-    "fingerprint": "node scripts/personalise.js"
+    "fingerprint": "node scripts/personalise.js",
+    "measure": "node scripts/measure.js",
+    "inspect": "node scripts/inspect.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0"

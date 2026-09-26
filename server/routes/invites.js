@@ -14,11 +14,11 @@
 // does not block a fresh one for the same address — which is right, and is why I did not add an
 // application-level "is there already an invite" check that would have to reproduce that rule.
 
-import { send, notFound, badRequest, conflict, gone, forbidden } from '../http.js';
+import { send, notFound, badRequest, conflict, gone, forbidden, unauthenticated } from '../http.js';
 import { assertSameOrg, optionalCaller } from '../context.js';
 import { stmt } from '../internal/sql.js';
 import { newId, nowIso } from '../db.js';
-import { newInviteToken, hashInviteToken, hashPassword } from '../auth.js';
+import { newInviteToken, hashInviteToken, hashPassword, verifyPassword } from '../auth.js';
 import { requireEmail, requireString, requirePassword, translateConstraint, LIMITS } from '../internal/http.js';
 import { audit, auditDenials, auditSuccess } from '../audit.js';
 import { assertRoleExists, assertCanModify } from '../lifecycle.js';
@@ -77,11 +77,20 @@ export function register(router) {
       // path cannot be used to sidestep the role-change path.
       assertCanModify(ctx.db, ctx.role, role);
 
-      // Already a member? The `memberships(org_id, user_id)` unique index is the real guarantee,
-      // but a 409 here is a far better message than a raw constraint error, and it is not a race
-      // because the index still catches the concurrent case below.
-      const byEmail = ctx.db.prepare('SELECT user_id FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = ? AND u.email = ?').get(params.org, email);
-      if (byEmail) throw conflict('that person is already a member of this organization', 'ALREADY_MEMBER');
+      // Already an ACTIVE member? The `memberships(org_id, user_id)` unique index is the real
+      // guarantee, but a 409 here is a far better message than a raw constraint error, and it is
+      // not a race because the index still catches the concurrent case below.
+      //
+      // `status <> 'removed'` matters and I got it wrong first: a removed member still has a row,
+      // so without this filter a person who had been removed could never be invited back — the one
+      // moment the flow most needs to work. Offboard/rehire is a named seam, and this was it.
+      const byEmail = ctx.db.prepare(
+        `SELECT m.status FROM memberships m JOIN users u ON u.id = m.user_id
+          WHERE m.org_id = ? AND u.email = ?`
+      ).get(params.org, email);
+      if (byEmail && byEmail.status !== 'removed') {
+        throw conflict('that person is already a member of this organization', 'ALREADY_MEMBER');
+      }
 
       const raw = newInviteToken();
       const id = newId('inv');
@@ -161,11 +170,19 @@ export function register(router) {
     const org = stmt(ctx.db, 'orgById').get(invite.org_id);
     if (!org || org.deleted_at !== null) throw notFound();
 
-    // Two ways in, and the difference matters:
-    //   - nobody signed in  -> redeem as a new account, creating the user with the given password
-    //   - signed in          -> attach THIS org to the account they already have
-    // The second path is why an existing user is never asked for a password here: a link in an
-    // inbox must not be a password reset, and password reset is out of scope (starter/README.md).
+    // Three ways in, and the difference matters:
+    //   - signed in, and it is your account   -> attach this org to the account you hold
+    //   - signed out, and the address is new  -> create the account with the password given
+    //   - signed out, and the address is taken -> PROVE it is you by giving the existing password
+    //
+    // The third case is not a password reset and must not become one. The link proves the INVITE;
+    // the password proves the PERSON. Nothing about the stored credential changes, and a wrong
+    // password gets the same generic refusal a sign-in would.
+    //
+    // It has to exist at all: a person removed from their only organization cannot sign in (login
+    // requires an active membership, because a token must be scoped to an org), so without it the
+    // one moment they most need to redeem an invite is the one moment they cannot. Found by the
+    // offboard/rehire case in `scripts/check-http-seams.js`.
     const caller = optionalCaller(ctx.db, ctx.secret, ctx.req);
     const existingUser = stmt(ctx.db, 'userByEmail').get(invite.email);
 
@@ -178,10 +195,17 @@ export function register(router) {
 
     let userId;
     if (existingUser) {
-      if (!caller) {
-        throw conflict('an account with that email already exists — sign in, then open this invite link again to join', 'ACCOUNT_EXISTS');
+      if (caller) {
+        userId = existingUser.id;
+      } else {
+        // Re-authenticate against the EXISTING credential. A wrong password is refused exactly as a
+        // sign-in would refuse it, and with the same wording, so this endpoint is not a password
+        // oracle for addresses that happen to exist.
+        if (password === null || !verifyPassword(password, existingUser.password_hash)) {
+          throw unauthenticated('that email already has an account — enter its existing password to join');
+        }
+        userId = existingUser.id;
       }
-      userId = existingUser.id;
     } else {
       if (password === null) throw badRequest('password is required');
       // The unique index on users.email is what makes two simultaneous accepts of the same invite
@@ -190,13 +214,26 @@ export function register(router) {
         userId = newId('usr');
         stmt(ctx.db, 'insertUser').run(userId, invite.email, name, hashPassword(password));
       } catch (err) {
+        // Someone else created this address between the lookup and the insert. Re-read the invite:
+        // if it is spent, that is what actually happened, and saying so is more use than reporting
+        // a unique-constraint failure on the email.
+        const fresh = lookupInvite(ctx.db, params.token);
+        if (!isLive(fresh) || isExpired(fresh)) throw conflict('this invite has already been used', 'INVITE_USED');
         throw translateConstraint(err, { onUnique: () => conflict('an account with that email already exists', 'ACCOUNT_EXISTS') });
       }
     }
 
-    // Last check before the write: is this org still able to have this person in it? An org can be
-    // deleted between the invite being mailed and being opened, and the membership insert would
-    // happily create an active membership in a soft-deleted org.
+    // Re-read the invite now that the account question is settled. Two accepts of ONE invite both
+    // read it as live at the top of the handler; by the time the loser gets here the winner has
+    // committed, so the honest answer is "this invite is spent" — not "you are already a member",
+    // which is a true but useless thing to tell someone who clicked a link five seconds ago.
+    // `scripts/check-http-seams.js` fires two accepts in parallel and asserts exactly this.
+    const current = lookupInvite(ctx.db, params.token);
+    assertUsable(current, () => conflict('this invite has already been used', 'INVITE_USED'));
+
+    // Is this org still able to have this person in it? An org can be deleted between the invite
+    // being mailed and being opened, and the membership insert would happily create an active
+    // membership in a soft-deleted org.
     const already = stmt(ctx.db, 'membershipByOrgUser').get(invite.org_id, userId);
     if (already && already.status === 'active') throw conflict('you are already a member of this organization', 'ALREADY_MEMBER');
 
@@ -261,7 +298,18 @@ const inviteDeadReason = (invite) =>
   : isExpired(invite) ? 'this invite has expired'
   : null;
 
+/**
+ * Throw the error the caller wants, if the invite is spent.
+ *
+ * `fail` RETURNS an HttpError rather than throwing it, and this THROWS what it returns. Getting
+ * that wrong is the single nastiest bug I hit in this build: the first version called `fail()` and
+ * threw away its return value, so neither the 410 nor the 409 path ever fired — a spent invite
+ * sailed through as though it were live. It was caught only because `check-api.js:178` asserts
+ * the 409 and I happened to also be asserting the CODE, which was coming back as `ALREADY_MEMBER`
+ * instead of `INVITE_USED`. The shipped assertion passed the whole time, because both are 409s.
+ * A test that passes for the wrong reason is worse than a test that fails.
+ */
 const assertUsable = (invite, fail) => {
-  if (!isLive(invite) || isExpired(invite)) fail();
+  if (!isLive(invite) || isExpired(invite)) throw fail();
   return invite;
 };

@@ -115,20 +115,28 @@ export function ownerCount(db, orgId) {
  * changes never come through here, because there is deliberately no `permission_revoked` reason
  * in the schema's enum and adding one would be the wrong fix.
  *
- * `exceptSessionId` exists for the transfer case, where a device's sessions end but a session
- * being superseded by a newer one on the same device should not end itself twice.
+ * Every filter is NULL-tolerant, INCLUDING `orgId`, and that is not a stylistic choice. A device
+ * transfer calls this with only a `deviceId`, because the sessions to end may be in either org
+ * (the device is moving between them). An earlier version guarded `userId` and `deviceId` with
+ * `? IS NULL OR col = ?` but wrote `org_id = ?` unguarded — so with no org it compared
+ * `org_id = NULL`, which is never true, and the transfer cascade silently updated ZERO rows while
+ * the transfer itself returned 200. Found by `scripts/check-http-seams.js`, which asserts that a
+ * live session on a transferred device actually ends. A cascade that does nothing is worse than no
+ * cascade: it looks like it worked.
+ *
+ * `exceptSessionId` exists for the case where one session should not end itself.
  */
-export function endActiveSessions(db, { orgId, userId = null, deviceId = null, reason, exceptSessionId = null }) {
+export function endActiveSessions(db, { orgId = null, userId = null, deviceId = null, reason, exceptSessionId = null }) {
   const at = nowIso();
   return db.prepare(
     `UPDATE sessions
         SET state = 'ended', end_reason = ?, ended_at = ?
       WHERE state = 'active'
-        AND org_id = ?
+        AND (? IS NULL OR org_id = ?)
         AND (? IS NULL OR user_id = ?)
         AND (? IS NULL OR device_id = ?)
         AND (? IS NULL OR id <> ?)`
-  ).run(reason, at, orgId, userId, userId, deviceId, deviceId, exceptSessionId, exceptSessionId).changes;
+  ).run(reason, at, orgId, orgId, userId, userId, deviceId, deviceId, exceptSessionId, exceptSessionId).changes;
 }
 
 /**

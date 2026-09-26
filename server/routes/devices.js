@@ -15,7 +15,7 @@
 //     into a 400 with `reason: "unknown_permission"` in one place, so it is a validation failure
 //     rather than a 500, and a typo is never a silent deny.
 
-import { send, notFound, badRequest, forbidden, normalizeTs } from '../http.js';
+import { send, notFound, badRequest, forbidden, normalizeTs, HttpError } from '../http.js';
 import { assertSameOrg } from '../context.js';
 import { stmt } from '../internal/sql.js';
 import { newId, nowIso, bumpPermVersion } from '../db.js';
@@ -241,7 +241,10 @@ export function register(router) {
       const startsAt = normalizeTs(ctx.body.startsAt, 'startsAt');
       const expiresAt = normalizeTs(ctx.body.expiresAt, 'expiresAt');
       if (expiresAt !== null && new Date(expiresAt).getTime() <= Date.now()) {
-        throw badRequest('expiresAt is in the past', 'GRANT_EXPIRED');
+        // `GRANT_EXPIRED` is a CODE in the documented table (PERMISSIONS.md §5), not a reason, and
+        // `badRequest()` only sets `reason`. So the error is built directly: the code matches the
+        // table, and the reason still carries a machine-readable cause like every other 400.
+        throw new HttpError(400, 'GRANT_EXPIRED', 'expiresAt is in the past', 'invalid_window');
       }
       if (startsAt !== null && expiresAt !== null && expiresAt <= startsAt) {
         throw badRequest('expiresAt must be after startsAt', 'invalid_window');
