@@ -23,7 +23,6 @@
 
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
-import { createHmac, randomUUID } from 'node:crypto';
 
 const PORT = 8188;
 const BASE = `http://localhost:${PORT}`;
@@ -100,14 +99,6 @@ const login = async (email, orgId, password = 'demo1234') => {
   const r = await call('POST', '/v1/auth/login', { body: { email, password, ...(orgId ? { orgId } : {}) } });
   return r.body?.token ?? null;
 };
-const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
-const sign = (claims, secret = SECRET) => {
-  const h = b64u({ alg: 'HS256', typ: 'JWT' });
-  const p = b64u({ iss: 'remoteops', aud: 'remoteops-api', jti: `jti-${randomUUID()}`, iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 900, ...claims });
-  return `${h}.${p}.${createHmac('sha256', secret).update(`${h}.${p}`).digest('base64url')}`;
-};
-
-const ROOT = new URL('..', import.meta.url).pathname;
 const read = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8');
 
 /** Key-shaped literals, used by sections 3 and 5. Declared once at module scope on purpose. */
@@ -139,8 +130,6 @@ if (!acmeAdmin || !acmeOwner || !globexOwner) {
   console.error('  setup failed: could not obtain baseline tokens');
   process.exit(1);
 }
-const claimsOf = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64url').toString());
-const adminClaims = claimsOf(acmeAdmin);
 
 // ===========================================================================
 section('1. Misconfigured database / no row-level security');

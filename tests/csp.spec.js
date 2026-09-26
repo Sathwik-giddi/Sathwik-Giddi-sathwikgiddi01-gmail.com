@@ -48,7 +48,6 @@ test.describe('Content-Security-Policy', () => {
       });
     });
 
-    const violations = [];
     await page.addInitScript(() => {
       window.__cspViolations = [];
       document.addEventListener('securitypolicyviolation', (e) => {

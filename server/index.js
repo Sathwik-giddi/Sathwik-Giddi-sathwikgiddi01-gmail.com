@@ -119,7 +119,7 @@ async function handleApi(req, res, url) {
 
     const key = `${req.method} ${hit.pattern}`;
     if (!PUBLIC_ROUTES.has(key)) {
-      Object.assign(ctx, authenticate(db, SECRET)(req, hit.params));
+      Object.assign(ctx, authenticate(db, SECRET)(req));
     }
 
     if (req.method !== 'GET' && req.method !== 'DELETE') {
@@ -168,7 +168,27 @@ async function serveStatic(req, res, url) {
     const info = await stat(file);
     if (info.isDirectory()) file = join(file, 'index.html');
   } catch {
-    file = join(DIST, 'index.html'); // SPA fallback: let the client router handle it
+    // The SPA fallback is for the CLIENT ROUTER, which owns paths like `/invite/<token>`. It is not
+    // for assets. This used to fall back for everything, so `GET /nope.js` and `GET /nope.css`
+    // answered `200 text/html` with the index document, and two things followed from that.
+    //
+    // A browser asked for a stylesheet that does not exist got HTML with a 200, so the failure
+    // surfaced as `Refused to apply style ... MIME type "text/html"` instead of a 404 naming the
+    // file. During development that is a blank page and a misleading message, and it hides the
+    // one thing worth knowing, which is that an asset is missing.
+    //
+    // It also faked existence. `GET /vite.svg` returned 200 and `GET /logo.svg` returned 200, for
+    // files this repository does not contain, so any check that asks "does this asset exist" by
+    // status code is told yes. `scripts/check-hardening.js` asserts every documented error status
+    // is reachable, and a static handler that answers 200 to everything makes that kind of question
+    // unaskable.
+    //
+    // So: a path with a file extension is a request for that file, and a missing one is a 404. Only
+    // an extensionless path is a client route, and only that gets the shell.
+    if (extname(rel) !== '') {
+      return send(res, 404, { error: { code: 'NOT_FOUND', message: 'not found', reason: null, requestId: null } });
+    }
+    file = join(DIST, 'index.html');
   }
 
   try {

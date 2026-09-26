@@ -45,11 +45,10 @@ const ctx = { userId: e.userId, orgId: e.orgId };
 console.log(`\n== personalisation ${overlay.fingerprint} ==`);
 console.log(`   role ${e.role} · permission ${e.permission} · org ${overlay.org.name}\n`);
 
-let catalogue, onAllow, onDeny, orgWide;
+let catalogue, onAllow, onDeny;
 try {
   onAllow = resolve(db, { ...ctx, deviceId: e.allowOn });
   onDeny  = resolve(db, { ...ctx, deviceId: e.denyOn });
-  orgWide = resolve(db, ctx);
   catalogue = Object.keys(onAllow.permissions);
 } catch (err) {
   console.log(`  FAIL  could not resolve at all: ${err.message}`);

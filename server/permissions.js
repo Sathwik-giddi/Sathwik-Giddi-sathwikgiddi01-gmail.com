@@ -237,19 +237,11 @@ export function resolve(db, { userId, orgId, deviceId = null, now = new Date() }
   return createResolver(db, { userId, orgId, now }).resolve(deviceId);
 }
 
-export function can(db, ctx, permission, deviceId = null) {
-  return createResolver(db, { userId: ctx.userId, orgId: ctx.orgId }).can(permission, deviceId);
-}
-
-/** Throws 403 carrying the reason code, so a refusal is debuggable. */
-export function assertCan(db, ctx, permission, deviceId = null) {
-  return createResolver(db, { userId: ctx.userId, orgId: ctx.orgId }).assertCan(permission, deviceId);
-}
-
-/** No privilege laundering: you may only grant authority you hold at that scope. */
-export function assertMayGrant(db, ctx, patterns, deviceId = null) {
-  return createResolver(db, { userId: ctx.userId, orgId: ctx.orgId }).assertMayGrant(patterns, deviceId);
-}
+// Three wrappers in this shape used to sit here: `can(db, ctx, permission)`, `assertCan(...)` and
+// `assertMayGrant(...)`, each rebuilding a resolver to call the same method every caller already has
+// as `ctx.resolver`. `can` was imported by exactly one script, which never called it. They are gone
+// because a second way to ask the same question is a second answer to keep in step, and the resolver
+// is the only one that is wired to the per-request cache.
 
 /**
  * The compound check: session:start AND the permission for the requested mode, and a refusal

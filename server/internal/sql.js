@@ -26,7 +26,6 @@ const SQL = {
   // --- permissions ---
   catalogue: `SELECT key FROM permissions ORDER BY key`,
   baseline: `SELECT permission FROM role_permissions WHERE role = ?`,
-  membershipByOrgUser: `SELECT * FROM memberships WHERE org_id = ? AND user_id = ?`,
   grants: `
     SELECT g.id AS id, g.effect AS effect, g.device_id AS deviceId, gp.permission AS pattern
       FROM grants g

@@ -27,7 +27,8 @@ const ratio = (fg, bg) => {
   return (hi + 0.05) / (lo + 0.05);
 };
 
-const rgb = (s) => (s.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+// The same parse exists inside `textRuns` below, because that one has to run in the page.
+// This copy was the Node-side twin and nothing called it.
 
 /**
  * Every visible leaf text node on the page, with the colour it is actually painted in and the

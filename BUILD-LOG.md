@@ -1538,7 +1538,7 @@ clause is restored.
 | create organization | `window.prompt` | dialog with validation, themes, inline 409 |
 | themes | hashed from the name, or nothing | 6 named, or the name hash, chosen by the user |
 | duplicate name, current org | 201, silently accepted | 409 `CONFLICT` / `duplicate_name` |
-| `npm run check` | 169 tests, 7 suites | 169 tests, 7 suites green |
+| `npm run check` | 551 assertions, 7 suites | 551 assertions, 7 suites green |
 | UI | 45 passing | 48 passing |
 
 ### No signup page, and the reason is worth more than the feature
@@ -1639,6 +1639,101 @@ the panel says which of the two permissions was missing.
 | empty rename | sent to the server, 400 | refused in the field |
 | `npm test` asserts the working tree | no | yes |
 | browser tests | 48 | 62 |
+
+### A number in the table above was wrong, and so was the one I gave out loud
+
+This table said `npm run check` was "169 tests". It is 551 assertions across 7 suites. 169 is the
+count from `check-http-seams.js`, the last script in the chain, and because each script prints its own
+`ALL PASS, N passed` line, reading the last line and calling it the total is easy. Phase 11 in this
+same file has the correct 551, so the document contradicted itself and I did not notice, which is the
+part worth recording. The seven suites are 43, 35, 18, 66, 87, 133 and 169.
+
+## Phase 14, an audit for dead and broken code, and three bugs hiding in plain sight
+
+Asked to look for useless code and broken code. There was no linter in the project, and the test
+suite cannot see either class: it asserts what the code does, not what the code contains. So the
+first task was an instrument, not a fix.
+
+**What I used.** ESLint installed with `--no-save`, so `package.json` and the lockfile were never
+touched and the packages are gone again now. Rules: `no-unused-vars`, `no-undef`, `no-dupe-keys`,
+`react-hooks/rules-of-hooks` and the correctness set. Then three purpose-built detectors: exports
+never imported anywhere, `className` tokens with no rule in `styles.css`, and `data-testid` values
+asserted in tests but absent from source. Then a runtime sweep that signs in as four roles, opens
+every card and every panel, and records uncaught exceptions, console errors, React warnings and
+unexpected 4xx/5xx.
+
+**The instruments were wrong three times before they were right, and that is the useful part.**
+
+1. Core ESLint does not count JSX as a reference, so `<Shell>` does not mark `Shell` used. The first
+   two runs were 90% noise reporting every component and the `React` import as dead.
+2. My dead-export detector collected namespace imports wrongly and added whole file *contents* to
+   the set of used names, so all of `web/api.js` looked dead. It is imported as `import * as api`.
+3. My class detector's fallback regex matched any lowercase string in a file, so it reported `devices`
+   and `People` as unstyled classes. `textRuns` and `min-width` are not class names.
+
+Each was caught by asking "is this plausible?" rather than by the tool. A detector that cries wolf
+is worse than none, because it gets ignored, and then the real finding goes with it.
+
+### Three real bugs, none of which any test could have caught
+
+**A missing stylesheet was served as `200 text/html`.** The SPA fallback answered the index document
+for every path that did not exist on disk, so `GET /nope.css` returned HTML with a 200 and the
+browser reported `Refused to apply style ... MIME type "text/html"` instead of a 404 naming the file.
+Worse, `GET /vite.svg` and `GET /logo.svg` both reported 200 for files this repository does not
+contain, so any question of the form "is this asset there?" was unaskable. A path with an extension
+is now a request for that file and a missing one is a 404; only an extensionless path gets the shell.
+`/invite/<token>` still resolves, which is the thing the fallback was actually for.
+
+**A duplicate key in the SQL registry.** `membershipByOrgUser` was defined twice, identically. The
+second silently replaced the first, so the copy at the top of the file had been unreachable since it
+was written, and editing it would have changed nothing while appearing to be the right edit. There is
+now a check for the class, not just the instance.
+
+**`App` returned before calling a single hook.** The routing prologue decided `/invite/<token>` and
+returned `<AcceptInvite>` above every `useState`. It works only because the path cannot change
+without a full page load, so the hook count per mount never varies. It is a violation of the rule
+React enforces, and it fails the day anyone adds client-side navigation, with "Rendered fewer hooks
+than expected" and a blank console. The router is now its own component that owns no hooks.
+
+### The security check that existed three times
+
+`sessionInOrg(db, orgId, sessionId)` was defined in `server/routes/sessions.js` and never called.
+Both routes that needed it inlined the identical two lines instead, so the check that stops one
+organization reading or ending another organization's session by id lived in three copies. Nothing was
+broken, which is exactly the problem: it is a one-line rule and the only thing between a session id
+and a cross-organization read, so the next person to change it changes one copy and every test still
+passes. There is now one copy and it is called.
+
+### Dead code, removed
+
+Nine exports in `web/api.js` that nothing called, including `ApiError` and `getActiveOrgId`, which the
+module uses on itself and only the `export` was dead. Eight `export` keywords on bindings their own
+module reads and nobody imports. Three module-level resolver wrappers in `permissions.js` that
+rebuild a resolver to call the method every caller already has as `ctx.resolver`, one of them
+imported by a script that never called it. A third copy of the mode-to-permission map in
+`lifecycle.js`, whose comment explained that it lived there so the module would not depend on
+`permissions.js`, while being read by nothing and depending on nothing. An uncalled `reset()` in
+`server/ratelimit.js`, documented as a test seam that no test used. An unused `params` argument, two
+unused component props passed and destructured but never read, two dead locals in test files, and
+fourteen unused bindings across the verification scripts.
+
+`server/ratelimit.js` also contained three literal NUL bytes, used correctly as the separator in the
+rate-limit cache key so a crafted address cannot collide with a credential. The intent is right and
+the file was binary to `rg`, `git diff` and every other text tool, which is how it went unnoticed. Same
+runtime value, written as `\u0000` now.
+
+Every removal was checked against the full suite, and the two new guards were each confirmed to fail
+when the fix they cover is reverted.
+
+| | before | after |
+|---|---|---|
+| linters in the project | none | none (this was a one-off audit) |
+| dead exports | 19 candidates, 12 real | 1, and that one is a false positive |
+| missing assets served as `200 text/html` | all of them | none |
+| copies of the session cross-org check | 3 | 1 |
+| `App` rules-of-hooks violations | 7 | 0 |
+| `npm run check` | 551 assertions | 564 assertions, 7 suites |
+| browser tests | 63 | 63 |
 
 ## Open threads
 

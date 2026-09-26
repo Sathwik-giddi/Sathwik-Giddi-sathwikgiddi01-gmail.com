@@ -16,7 +16,7 @@
 // This file is the checklist; those two are the depth.
 
 import { spawn, execFileSync } from 'node:child_process';
-import { rmSync, existsSync } from 'node:fs';
+import { rmSync, existsSync, readFileSync } from 'node:fs';
 import { createHmac, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 
@@ -596,6 +596,47 @@ console.log('\n== every response carries a security header set ==');
   })();
   check('the SPA document is revalidated rather than pinned', [doc.status, doc.cacheControl], [200, 'no-cache']);
   check('and it carries the same header set', doc.nosniff, 'nosniff');
+
+  // The SPA fallback is for the CLIENT ROUTER, not for assets. It used to answer `200 text/html`
+  // with the index document for every path that did not exist on disk, which meant a missing
+  // stylesheet surfaced in the browser as `Refused to apply style ... MIME type "text/html"`
+  // instead of a 404 naming the file, and `GET /vite.svg` reported that a file this repository does
+  // not contain exists. The last part is the reason this is a test and not a note: a static handler
+  // that answers 200 to everything makes "is this asset there?" unaskable, and the audit is full of
+  // questions of exactly that shape.
+  const asset = async (p) => {
+    const r = await fetch(`http://localhost:${PORT}${p}`);
+    await r.text();
+    return { status: r.status, type: r.headers.get('content-type') ?? '' };
+  };
+  for (const missing of ['/nope.js', '/nope.css', '/vite.svg', '/logo.svg']) {
+    const got = await asset(missing);
+    check(`a missing asset is a 404, not the SPA shell: ${missing}`, got.status, 404);
+    check(`  ...and is not served as html: ${missing}`, got.type.includes('text/html'), false);
+  }
+  // A client route is NOT an asset, and must still get the shell, or /invite/<token> is a 404.
+  const route = await asset('/invite/some-token');
+  check('a client route still receives the SPA document', [route.status, route.type.includes('text/html')], [200, true]);
+
+  // The SQL registry is a plain object literal, so a key that appears twice is not an error. The
+  // second definition silently replaces the first, the statement the first one was written for
+  // becomes unreachable, and nothing anywhere reports it. `membershipByOrgUser` was defined twice,
+  // identically, and the copy at the top of the file had been dead since it was written. Editing
+  // the dead copy is the worst outcome available, because it is the copy a reader finds first.
+  const sqlSrc = readFileSync(new URL('../server/internal/sql.js', import.meta.url), 'utf8');
+  const keys = [...sqlSrc.matchAll(/^\s{2}([A-Za-z_$][\w$]*):/gm)].map((m) => m[1]);
+  const seen = new Set();
+  const dupes = [...new Set(keys.filter((k) => (seen.has(k) ? true : (seen.add(k), false))))];
+  check('no statement name is defined twice in the SQL registry', dupes, []);
+  check('  ...and the registry is not trivially small', keys.length > 40, true);
+
+  // And the one asset the document actually asks for is really there. The page declared no icon, so
+  // every single load asked the browser to fetch /favicon.ico, got a 404, and logged it. A console
+  // whose argument is that it is careful should not open with an error in its own console.
+  const icon = await fetch(`http://localhost:${PORT}/favicon.svg`);
+  await icon.text();
+  check('the declared favicon is served', icon.status, 200);
+  check('  ...as an svg, not the SPA document', (icon.headers.get('content-type') ?? '').includes('image/svg'), true);
 }
 
 // ---------------------------------------------------------------------------

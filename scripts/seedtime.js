@@ -41,7 +41,7 @@ export function resolveRelativeTime(value) {
 }
 
 /** True when `value` is a relative offset this module understands. */
-export const isOffset = (value) => typeof value === 'string' && OFFSET.test(value);
+const isOffset = (value) => typeof value === 'string' && OFFSET.test(value);
 
 /**
  * Every timestamp-shaped field in the fixture must either be an offset we can resolve or something

@@ -21,7 +21,7 @@
 import { performance } from 'node:perf_hooks';
 import { EventEmitter } from 'node:events';
 import Database from 'better-sqlite3';
-import { readFileSync, rmSync, existsSync } from 'node:fs';
+import { rmSync, existsSync } from 'node:fs';
 
 // --- count executed statements ----------------------------------------------
 const counts = new Map();

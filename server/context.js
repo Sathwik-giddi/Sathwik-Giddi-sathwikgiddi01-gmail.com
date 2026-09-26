@@ -47,7 +47,8 @@ function readBearer(req) {
  * with the request, which is what makes it safe, see the note on `createResolver`.
  */
 export function authenticate(db, secret) {
-  return function buildContext(req, params) {
+  // No `params`: this never read it, and the one caller passed `hit.params` into a hole.
+  return function buildContext(req) {
     const claims = verifyAccessToken(readBearer(req), secret);
 
     // One lookup for the membership AND the org's liveness. A token for a soft-deleted org is

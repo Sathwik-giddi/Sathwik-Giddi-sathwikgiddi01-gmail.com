@@ -3,8 +3,8 @@
 
 import { readFileSync } from 'node:fs';
 import { resolveRelativeTime } from './seedtime.js';
-import { openDatabase, nowIso, bumpPermVersion, newId } from '../server/db.js';
-import { resolve, can, assertCanStartSession } from '../server/permissions.js';
+import { openDatabase, newId } from '../server/db.js';
+import { resolve, assertCanStartSession } from '../server/permissions.js';
 
 // Build a throwaway DB from the real schema + reference data.
 const db = openDatabase(':memory:');

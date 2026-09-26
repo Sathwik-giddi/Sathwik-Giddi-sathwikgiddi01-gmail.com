@@ -13,7 +13,7 @@ const ALG = 'HS256';
 const ISS = 'remoteops';
 const AUD = 'remoteops-api';
 
-export const ACCESS_TTL_SECONDS = 15 * 60;
+const ACCESS_TTL_SECONDS = 15 * 60;
 export const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60;
 
 const b64 = (buf) => Buffer.from(buf).toString('base64url');

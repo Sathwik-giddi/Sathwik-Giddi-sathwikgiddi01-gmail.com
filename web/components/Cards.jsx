@@ -656,8 +656,6 @@ export function GrantsCard({ orgId, orgPermissions, grants, members, devices, on
 
       {creating && (
         <NewGrantForm
-          orgId={orgId}
-          orgPermissions={orgPermissions}
           members={members}
           devices={devices}
           reference={ref}
@@ -721,7 +719,7 @@ export function GrantsCard({ orgId, orgPermissions, grants, members, devices, on
   );
 }
 
-function NewGrantForm({ orgId, orgPermissions, members, devices, reference, busy, onCancel, onSubmit }) {
+function NewGrantForm({ members, devices, reference, busy, onCancel, onSubmit }) {
   const [userId, setUserId] = useState(members[0]?.user_id ?? '');
   const [deviceId, setDeviceId] = useState('');
   const [effect, setEffect] = useState('allow');

@@ -34,7 +34,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-export const THEMES = ['cobalt', 'amber', 'moss', 'plum', 'rust', 'teal'];
+const THEMES = ['cobalt', 'amber', 'moss', 'plum', 'rust', 'teal'];
 
 // The 19 documented permissions. Used ONLY to draw a plausible baseline subset, never
 // to decide allow/deny, and never as an exhaustive truth. If a permission is ever added
@@ -64,7 +64,7 @@ const DEVICE_KINDS = ['macos', 'windows', 'linux', 'android', 'ios'];
 
 // --- determinism ------------------------------------------------------------
 
-export function fingerprint(nonce) {
+function fingerprint(nonce) {
   return createHash('sha256').update(String(nonce)).digest('hex').slice(0, 12);
 }
 

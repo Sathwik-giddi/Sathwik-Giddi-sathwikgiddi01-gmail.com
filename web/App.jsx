@@ -37,21 +37,40 @@ const CARDS = [
   { key: 'admin',    label: 'Admin',    icon: '⚙', anyOf: ['org:update', 'org:delete'] },
 ];
 
+/**
+ * The whole client router: two routes, chosen from the path.
+ *
+ * The invite route is decided before anything else so an unauthenticated visitor never sees the
+ * shell, which is also what keeps the organization name out of the page.
+ *
+ * It owns no hooks, and that is the entire reason it is its own component. This used to be one
+ * function: the routing prologue, then every `useState`, with `return <AcceptInvite>` for
+ * `/invite/:token` sitting ABOVE them. It only works because the path cannot change without a
+ * full page load, so the number of hooks per mount never varies. It is still the rule React
+ * enforces, and it breaks the day anyone adds client-side navigation, with "Rendered fewer hooks
+ * than expected" and a blank console pointing at this file rather than at the routing change.
+ */
 export function App() {
-  // ---- routing ------------------------------------------------------------
-  // Two routes, decided from the path. The invite route is handled before anything else so that an
-  // unauthenticated visitor never sees the shell, which is also what keeps the org name out of the
-  // page for `tests/ui.spec.js:308`.
-  const path = window.location.pathname;
-  // `decodeURIComponent` throws on a malformed escape, and this runs during render, so `/invite/%ff`
-  // would blank the page instead of showing the same "this link did not work" every other bad
-  // token gets. An undecodable token is simply a token the server will refuse, so treat it as one.
-  const inviteToken = (() => {
-    const match = /^\/invite\/(.+)$/.exec(path);
-    if (!match) return null;
-    try { return decodeURIComponent(match[1]); } catch { return match[1]; }
-  })();
-  if (inviteToken !== null) return <AcceptInvite token={inviteToken} />;
+    // Two routes, decided from the path. The invite route is handled before anything else so that an
+    // unauthenticated visitor never sees the shell, which is also what keeps the org name out of the
+    // page for `tests/ui.spec.js:308`.
+    const path = window.location.pathname;
+    // `decodeURIComponent` throws on a malformed escape, and this runs during render, so `/invite/%ff`
+    // would blank the page instead of showing the same "this link did not work" every other bad
+    // token gets. An undecodable token is simply a token the server will refuse, so treat it as one.
+    const inviteToken = (() => {
+      const match = /^\/invite\/(.+)$/.exec(path);
+      if (!match) return null;
+      try { return decodeURIComponent(match[1]); } catch { return match[1]; }
+    })();
+    if (inviteToken !== null) return <AcceptInvite token={inviteToken} />;
+  return <Console />;
+}
+
+/**
+ * The signed-in application. Owns every hook, and always calls all of them.
+ */
+function Console() {
 
   // ---- session ------------------------------------------------------------
   const [me, setMe] = useState(null);
@@ -63,6 +82,16 @@ export function App() {
   // console hanging with no shell and no reason, which is the one state BRIEF.md §3.2(5) calls
   // indistinguishable from a broken app.
   const [bootError, setBootError] = useState(null);
+
+  // Declared before the effect that calls it, and listed in that effect's dependencies. Its identity
+  // is stable (`useCallback` with no dependencies), so this changes nothing at runtime; what it
+  // removes is the situation where the effect closes over a binding that is textually below it, and
+  // `react-hooks/exhaustive-deps` correctly points at the omission.
+  const loadMe = useCallback(async () => {
+    const payload = await api.me();
+    setMe(payload);
+    return payload;
+  }, []);
 
   // A reload has no access token, there is nothing in web storage to restore one from. The
   // httpOnly refresh cookie is sent by the browser automatically, so one POST rebuilds the session.
@@ -81,7 +110,7 @@ export function App() {
       }
     })();
     return () => { live = false; };
-  }, []);
+  }, [loadMe]);
 
   // A 401 from anywhere drops back to the sign-in screen, because at that point the session really
   // is over. TOKEN_STALE is handled one level down in api.js, which refreshes and retries first.
@@ -92,12 +121,6 @@ export function App() {
       setNotice('Your session ended. Sign in again.');
     });
     return () => api.setUnauthenticatedHandler(null);
-  }, []);
-
-  const loadMe = useCallback(async () => {
-    const payload = await api.me();
-    setMe(payload);
-    return payload;
   }, []);
 
   async function signIn() {

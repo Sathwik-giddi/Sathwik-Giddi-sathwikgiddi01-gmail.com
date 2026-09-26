@@ -29,15 +29,14 @@ let onUnauthenticated = null;
  */
 let activeOrgId = null;
 
-export const getToken = () => accessToken;
 export const setToken = (t) => { accessToken = t ?? null; };
 export const clearToken = () => { accessToken = null; activeOrgId = null; };
-export const getActiveOrgId = () => activeOrgId;
+const getActiveOrgId = () => activeOrgId;
 
 /** Registered by the app so a 401 anywhere can drop the console back to the sign-in screen. */
 export const setUnauthenticatedHandler = (fn) => { onUnauthenticated = fn ?? null; };
 
-export class ApiError extends Error {
+class ApiError extends Error {
   constructor(status, body) {
     super(body?.error?.message ?? `request failed (${status})`);
     this.status = status;
@@ -186,7 +185,6 @@ export const reference = () => get('/v1/reference');
 
 // --- orgs, members, audit ---------------------------------------------------
 
-export const listOrgs = () => get('/v1/orgs');
 // `theme` was accepted by the endpoint since Phase 0 and never sent, so the colour was an opaque
 // hash of the name and the person creating an organization never got to choose it.
 export const createOrg = (name, theme) => post('/v1/orgs', theme ? { name, theme } : { name });
@@ -198,18 +196,14 @@ export const setRole = (orgId, userId, role) => patch(`/v1/orgs/${orgId}/members
 export const suspendMember = (orgId, userId) => post(`/v1/orgs/${orgId}/members/${userId}/suspend`, {});
 export const reinstateMember = (orgId, userId) => del(`/v1/orgs/${orgId}/members/${userId}/suspend`);
 export const removeMember = (orgId, userId) => del(`/v1/orgs/${orgId}/members/${userId}`);
-export const leaveOrg = (orgId) => del(`/v1/orgs/${orgId}/members/me`);
 
-export const effective = (orgId, userId) => get(`/v1/orgs/${orgId}/users/${userId}/effective`);
 
 export const listAudit = (orgId, { limit = 50, offset = 0 } = {}) =>
   get(`/v1/orgs/${orgId}/audit?limit=${limit}&offset=${offset}`);
 
 // --- invites ----------------------------------------------------------------
 
-export const listInvites = (orgId) => get(`/v1/orgs/${orgId}/invites`);
 export const createInvite = (orgId, email, role) => post(`/v1/orgs/${orgId}/invites`, { email, role });
-export const revokeInvite = (orgId, id) => del(`/v1/orgs/${orgId}/invites/${id}`);
 
 /** Public. No token, this is what the /invite/:token page calls before anyone has signed in. */
 export const peekInvite = (token) => get(`/v1/invites/${encodeURIComponent(token)}`, { auth: false });
@@ -219,7 +213,6 @@ export const acceptInvite = (token, name, password) =>
 // --- devices ----------------------------------------------------------------
 
 export const listDevices = (orgId) => get(`/v1/orgs/${orgId}/devices`);
-export const getDevice = (orgId, id) => get(`/v1/orgs/${orgId}/devices/${id}`);
 export const createDevice = (orgId, name, kind) => post(`/v1/orgs/${orgId}/devices`, { name, kind });
 export const renameDevice = (orgId, id, name) => patch(`/v1/orgs/${orgId}/devices/${id}`, { name });
 export const decommissionDevice = (orgId, id) => del(`/v1/orgs/${orgId}/devices/${id}`);

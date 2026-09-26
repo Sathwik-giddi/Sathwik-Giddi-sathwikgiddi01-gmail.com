@@ -867,6 +867,39 @@ viewer: it shows your role beside each one and lets the server answer.
 
 ---
 
+### A missing asset is a 404, and the SPA fallback is only for client routes
+
+**What I chose:** a request path containing a file extension is a request for that file. If it is not
+on disk, the answer is 404. Only an extensionless path falls through to `index.html`.
+
+**Why:** the fallback existed for the client router, which owns `/invite/<token>`. It was answering
+the index document for everything, which meant a missing stylesheet arrived as `200 text/html` and
+the browser complained about a MIME type instead of naming the file. The cost was not the confusion,
+though that is real. It was that `GET /vite.svg` returned 200 for a file this repository does not
+contain, so "does this asset exist" became unaskable, and this audit is full of questions of that
+shape.
+
+**What I rejected:** a content-negotiation fallback (`Accept: text/html`), which is the usual
+refinement. It is more machinery for the same decision, and a fetch or an `<img>` that 404s would
+still be answered with a document.
+
+---
+
+### One copy of the session cross-org check, and one component that owns the hooks
+
+**What I chose:** `sessionInOrg` is the only place that decides whether a session id belongs to the
+caller's organization, and both routes call it. `App` is a router that owns no hooks and renders
+either `<AcceptInvite>` or `<Console>`, and `<Console>` calls all of its hooks unconditionally.
+
+**Why:** both were triplications or violations that happened to be correct. The session check existed
+as a function and was inlined at both call sites, so the rule that stops one organization reading or
+ending another's session existed three times; the next change would have been made in one of them
+with every test still green. The hooks sat below an early `return`, which is legal only because the
+path cannot change without a full page load, and which fails with a blank console the day it can.
+
+**What would change my mind:** a client-side router. That is the thing that makes the second one
+matter rather than being pedantic, and it is the reason to fix it before writing one.
+
 ## Deliberately not built
 
 Stated now for the things already decided; this section grows as the build does.

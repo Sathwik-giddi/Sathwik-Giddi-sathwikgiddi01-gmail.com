@@ -9,7 +9,6 @@
 //
 // Read-only. It opens the same app.db the server does and writes nothing.
 
-import { readFileSync } from 'node:fs';
 import { openDatabase } from '../server/db.js';
 import { createResolver } from '../server/permissions.js';
 import { readNonce, buildOverlay } from './personalise.js';

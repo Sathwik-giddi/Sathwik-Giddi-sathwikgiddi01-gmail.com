@@ -27,7 +27,7 @@ import { nowIso } from './db.js';
 const OWNER = 'owner';
 
 /** `{ roleKey: rank }` for every role in the table. Never a hardcoded five. */
-export function roleRanks(db) {
+function roleRanks(db) {
   const ranks = Object.create(null);
   for (const row of stmt(db, 'allRoles').all()) ranks[row.key] = row.rank;
   return ranks;
@@ -158,6 +158,8 @@ export function sessionExpiry(db, orgId) {
   return new Date(Date.now() + minutes * 60_000).toISOString();
 }
 
-// The mode -> permission map is a property of the mode, not a resolution, which is why it can
-// live here without this module depending on permissions.js.
-const MODE_TO_PERMISSION = { view: 'device:view', control: 'device:control', terminal: 'device:terminal' };
+// A third copy of the mode -> permission map used to live here, with a comment explaining that it
+// could sit in this module without depending on permissions.js. It was never read by anything, so
+// it depended on nothing and helped nothing: a map that exists only to be a map is a second thing
+// to forget when a mode is added. `MODE_PERMISSION` in permissions.js is the one the engine reads
+// and the one `/v1/reference` now serves, so this file needs no copy at all.

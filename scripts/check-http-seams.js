@@ -103,7 +103,7 @@ const devA = await call('POST', `/orgs/${A}/devices`, { token: A_TOKEN, body: { 
 const devA2 = await call('POST', `/orgs/${A}/devices`, { token: A_TOKEN, body: { name: 'alpha-laptop', kind: 'macos' } });
 const devB = await call('POST', `/orgs/${B}/devices`, { token: B_TOKEN, body: { name: 'beta-box', kind: 'linux' } });
 check('devices created in both orgs', [devA.status, devA2.status, devB.status], [201, 201, 201]);
-const dA = devA.body.id, dA2 = devA2.body.id, dB = devB.body.id;
+const dA = devA.body.id, dA2 = devA2.body.id;   // devB's id is never addressed
 
 // A second human in org A, so the tests have a non-owner to act.
 const invite = await call('POST', `/orgs/${A}/invites`, { token: A_TOKEN, body: { email: 'helper@example.test', role: 'operator' } });
@@ -675,8 +675,6 @@ console.log('\n== modification authority is the same rule on every verb ==');
   // was enforced on the role-change route and missing from suspend/reinstate, so one admin got two
   // different answers to the same question about the same target.
   const owner = (await call('POST', '/auth/login', { body: { email: 'owner@acme.test', password: 'demo1234' } })).body.token;
-  const adminTok = (await call('POST', '/auth/login', { body: { email: 'admin@acme.test', password: 'demo1234' } })).body.token;
-  const adminA = (await call('POST', '/auth/token', { token: adminTok, body: { orgId: A } })).body.token;
 
   // A fresh org so the two-owner case does not muddy it.
   const org = await call('POST', '/orgs', { token: owner, body: { name: 'Rank Tests' } });
@@ -769,7 +767,9 @@ console.log('\n== two information leaks, both one field away from correct code =
   const ownerL = (await call('POST', '/auth/token', { token: owner, body: { orgId: L } })).body.token;
 
   // Two devices, one visible to our viewer, one not.
-  const shown = await call('POST', `/orgs/${L}/devices`, { token: ownerL, body: { name: 'shown-box', kind: 'linux' } });
+  // Not assigned: only `hidden` is asserted on by id, but this device has to EXIST or the
+  // row-count assertion below stops meaning anything.
+  await call('POST', `/orgs/${L}/devices`, { token: ownerL, body: { name: 'shown-box', kind: 'linux' } });
   const hidden = await call('POST', `/orgs/${L}/devices`, { token: ownerL, body: { name: 'hidden-box', kind: 'linux' } });
   const inv = await call('POST', `/orgs/${L}/invites`, { token: ownerL, body: { email: 'nosy@example.test', role: 'viewer' } });
   await call('POST', `/invites/${inv.body.inviteToken}/accept`, { body: { name: 'Nosy', password: 'password123' } });

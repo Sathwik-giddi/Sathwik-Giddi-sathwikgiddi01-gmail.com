@@ -35,7 +35,17 @@ import { MODE_PERMISSION } from '../permissions.js';
 
 const MODES = Object.keys(MODE_PERMISSION);
 
-/** A session in this org, or 404. A session id is not a capability, so it is scoped like a device. */
+/**
+ * A session in this org, or 404. A session id is not a capability, so it is scoped like a device.
+ *
+ * This existed and was never called. Both routes that need it inlined the identical two lines
+ * instead, so the check that stops one organization reading or ending another organization's session
+ * existed in three copies: once here, once in each handler. Nothing was broken by it, and that is
+ * the problem. The rule is one line long and it is the only thing standing between a session id and
+ * a cross-organization read, so the next person to change it changes one copy, the two handlers keep
+ * the old behaviour, and no test fails because every test still gets a 404 for the reason it
+ * expected. It is now the single copy, called from both.
+ */
 function sessionInOrg(db, orgId, sessionId) {
   const session = stmt(db, 'sessionById').get(sessionId);
   if (!session || session.org_id !== orgId) throw notFound();
@@ -125,8 +135,7 @@ export function register(router) {
   // session's own org_id has to match it, or it is a 404.
   // =========================================================================
   router.get('/v1/sessions/:id', async (ctx, params, res) => {
-    const session = stmt(ctx.db, 'sessionById').get(params.id);
-    if (!session || session.org_id !== ctx.orgId) throw notFound();
+    const session = sessionInOrg(ctx.db, ctx.orgId, params.id);
     expireStaleSessions(ctx.db, { orgId: ctx.orgId });
 
     return auditDenials(ctx.db, ctx, { action: 'session.read.one', targetType: 'session', targetId: session.id }, () => {
@@ -142,8 +151,7 @@ export function register(router) {
   // End a session
   // =========================================================================
   router.delete('/v1/sessions/:id', async (ctx, params, res) => {
-    const session = stmt(ctx.db, 'sessionById').get(params.id);
-    if (!session || session.org_id !== ctx.orgId) throw notFound();
+    const session = sessionInOrg(ctx.db, ctx.orgId, params.id);
 
     // Sweep first, like every other session read and write. Without it, stopping a session whose
     // TTL had already passed recorded `user_stopped`, which is a false statement about why it
