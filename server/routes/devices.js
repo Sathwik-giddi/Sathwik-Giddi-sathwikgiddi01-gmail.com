@@ -61,7 +61,12 @@ export function register(router) {
 
       return send(res, 200, {
         devices: visible.map((d) => deviceRow(d, ctx.resolver.permissionsFor(d.id))),
-        total: devices.length,
+        // `total` is the count of rows RETURNED, not the count of rows in the org. It used to be
+        // `devices.length` — the unfiltered count — which undid the filter one field away: a caller
+        // denied `device:view` on one machine received 4 rows and was told there were 5, which is
+        // both an information leak and a direct contradiction of "absence is not redaction"
+        // (UI-INVENTORY.md §1.3). Verified before the fix: 4 rows, total 5.
+        total: visible.length,
       });
     });
   });
@@ -146,11 +151,32 @@ export function register(router) {
       if (toOrgId === params.org) throw badRequest('the device is already in that organization', 'same_org');
 
       const target = stmt(ctx.db, 'orgById').get(toOrgId);
-      if (!target || target.deleted_at !== null) throw notFound();
 
-      // Membership, then permission, in the destination. `createResolver` handles "not a member"
-      // as a deny with reason not_a_member, so an org you do not belong to is a 403 here rather
-      // than a 404 that would confirm the org exists.
+      // Membership is part of "can you see this?", so it is answered BEFORE the destination's
+      // permissions, and a destination you are not a member of is a 404 rather than a 403.
+      //
+      // I had this the other way round, and the comment I wrote argued FOR it — I said a 404 "would
+      // confirm the org exists", which is precisely the reasoning PERMISSIONS.md §5 rejects. The
+      // order I actually had was: org exists? -> 404. then assertCan(device:provision) -> 403. So
+      // walking the id space gave 403 for every org that exists and is not soft-deleted, and 404
+      // for the rest. Verified before the fix, as a caller holding device:provision in exactly one
+      // org:
+      //
+      //     toOrgId=org_globex            -> 403   this org exists and you are not in it
+      //     toOrgId=org_nonexistent_zzz   -> 404   no such org
+      //
+      // That is a complete enumeration of the deployment from one org you legitimately belong to,
+      // and it is what §5 calls an information leak. Both branches are now the same 404, so the
+      // response says only what the caller already knew: they are not able to address it.
+      const destinationMembership = stmt(ctx.db, 'membershipByOrgUser').get(toOrgId, ctx.userId);
+      if (!target || target.deleted_at !== null || !destinationMembership || destinationMembership.status !== 'active') {
+        throw notFound();
+      }
+
+      // Now authority: device:provision in the DESTINATION as well (BRIEF.md §5.1). The caller's
+      // token only speaks for the source org, so this is resolved directly against the destination
+      // membership — the one deliberate cross-org authorisation in the system, and the reason the
+      // membership check above has to come first.
       const destination = createResolver(ctx.db, { userId: ctx.userId, orgId: toOrgId });
       destination.assertCan('device:provision');
 

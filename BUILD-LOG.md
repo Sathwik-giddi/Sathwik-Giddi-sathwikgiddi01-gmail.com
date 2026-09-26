@@ -762,6 +762,42 @@ I had excluded only `removed`, so a grant could be attached to a `suspended` or 
 `invited` membership — authority with nobody to use it, pre-loaded for the moment they came back.
 Now only `active` is accepted.
 
+### 7. A row filter, undone by the field next to it
+
+`GET /devices` filtered correctly — a device the caller cannot `device:view` is genuinely absent
+from `devices` — and then returned `total: devices.length`, the **unfiltered** count. So a viewer
+received 4 rows and was told there were 5, which discloses exactly how many machines they cannot
+see. It is the same rule as "absence is not redaction", defeated in one field, one line below the
+code that got it right.
+
+This is the finding I keep coming back to. The row filter was right. The `total` was wrong. Both
+were in the same three lines, and the audit that found it read the object rather than the filter.
+
+### 8. An information leak I wrote a comment defending
+
+The device-transfer route took a `toOrgId` from the body — an org id the caller could name freely —
+and answered `403` for an org that exists and `404` for one that does not:
+
+```
+toOrgId=org_globex            -> 403   you hold device:provision nowhere in there
+toOrgId=org_nonexistent_zzz   -> 404   no such org
+```
+
+Walk the id space and you enumerate every organization in the deployment, plus its soft-delete
+state, from one org you legitimately belong to. And the comment I had written argued **for** the
+403 — I wrote that a 404 "would confirm the org exists", which is word-for-word the reasoning
+`PERMISSIONS.md §5` rejects. I did not misread the rule; I restated it, inverted, and agreed with
+myself.
+
+Both branches are now the same 404, because the honest question is not "does this org exist" but
+"can you address it" — and membership is part of being able to. The test asserts the two responses
+match by status **and by body**, since a different `message` between the two cases is the same leak
+in a different field.
+
+Writing the test also caught a mistake in the test: my first version transferred to an org that the
+same owner had created, so the transfer legitimately succeeded and the assertion failed against a
+leak that was not present. The destination is now created by a different account.
+
 ### A crash I introduced fixing the above, which the test caught immediately
 
 The `reinstate` guard calls `conflict()`, and I had removed that from the import list in Phase 3

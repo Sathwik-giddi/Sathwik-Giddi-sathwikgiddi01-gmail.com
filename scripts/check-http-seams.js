@@ -754,6 +754,60 @@ console.log('\n== a grant may only target someone who can use it ==');
   check('a grant to a REMOVED member is 404', [toRemoved.status, toRemoved.code], [404, 'NOT_FOUND']);
 }
 
+// =============================================================================
+console.log('\n== two information leaks, both one field away from correct code ==');
+{
+  const owner = (await call('POST', '/auth/login', { body: { email: 'owner@acme.test', password: 'demo1234' } })).body.token;
+  const org = await call('POST', '/orgs', { token: owner, body: { name: 'Leak Tests' } });
+  const L = org.body.id;
+  const ownerL = (await call('POST', '/auth/token', { token: owner, body: { orgId: L } })).body.token;
+
+  // Two devices, one visible to our viewer, one not.
+  const shown = await call('POST', `/orgs/${L}/devices`, { token: ownerL, body: { name: 'shown-box', kind: 'linux' } });
+  const hidden = await call('POST', `/orgs/${L}/devices`, { token: ownerL, body: { name: 'hidden-box', kind: 'linux' } });
+  const inv = await call('POST', `/orgs/${L}/invites`, { token: ownerL, body: { email: 'nosy@example.test', role: 'viewer' } });
+  await call('POST', `/invites/${inv.body.inviteToken}/accept`, { body: { name: 'Nosy', password: 'password123' } });
+  const roster = await call('GET', `/orgs/${L}/members`, { token: ownerL });
+  const nosy = roster.body.members.find((m) => m.email === 'nosy@example.test');
+  await call('POST', `/orgs/${L}/grants`, { token: ownerL, body: { userId: nosy.user_id, effect: 'deny', permissions: ['device:view'], deviceId: hidden.body.id } });
+  const nosyL = (await call('POST', '/auth/token', { token: await login('nosy@example.test', 'password123'), body: { orgId: L } })).body.token;
+
+  // --- leak 1: the row count told them what they could not see ---
+  const list = await call('GET', `/orgs/${L}/devices`, { token: nosyL });
+  check('the hidden device is not listed', list.body.devices.some((d) => d.id === hidden.body.id), false);
+  check('  ...one row is returned', list.body.devices.length, 1);
+  check('  ...and `total` agrees with the rows, not the org', list.body.total, list.body.devices.length);
+  check('  ...so the count of hidden devices is not disclosed', list.body.total, 1);
+  check('the owner, who can see both, gets 2', (await call('GET', `/orgs/${L}/devices`, { token: ownerL })).body.total, 2);
+
+  // --- leak 2: transfer told them which org ids exist ---
+  //
+  // The owner of L must not be a member of the destination, or the transfer is legitimate and the
+  // test proves nothing. So the destination org is created by a DIFFERENT account, which makes the
+  // caller a non-member of a real, live org -- the exact case the leak needed. (My first version
+  // used an org this same owner had created, so the transfer SUCCEEDED and the test asserted 200
+  // against a leak that was not there.)
+  const otherAdmin = (await call('POST', '/auth/login', { body: { email: 'admin@acme.test', password: 'demo1234' } })).body.token;
+  const foreignOrg = await call('POST', '/orgs', { token: otherAdmin, body: { name: 'Someone Elses Org' } });
+  const FOREIGN = foreignOrg.body.id;
+  check('the caller cannot address the destination org at all', (await call('GET', `/orgs/${FOREIGN}/devices`, { token: ownerL })).status, 404);
+
+  const deviceForTransfer = (await call('POST', `/orgs/${L}/devices`, { token: ownerL, body: { name: 'transfer-box', kind: 'linux' } })).body;
+  const asMember = await call('POST', `/orgs/${L}/devices/${deviceForTransfer.id}/transfer`, { token: ownerL, body: { toOrgId: FOREIGN } });
+  const notReal = await call('POST', `/orgs/${L}/devices/${deviceForTransfer.id}/transfer`, { token: ownerL, body: { toOrgId: 'org_definitely_not_real_zz' } });
+  const ownOrg = await call('POST', `/orgs/${L}/devices/${deviceForTransfer.id}/transfer`, { token: ownerL, body: { toOrgId: L } });
+
+  check('transfer to a real org you are not in -> 404', [asMember.status, asMember.code], [404, 'NOT_FOUND']);
+  check('  ...and to an org that does not exist -> 404', [notReal.status, notReal.code], [404, 'NOT_FOUND']);
+  check('  ...so the two are indistinguishable by status', asMember.status, notReal.status);
+  // The BODIES must match too, not just the statuses: a different `message` between "no such org"
+  // and "you are not in that org" is the same leak in a different field.
+  check('  ...and by body as well', [asMember.body.error.code, asMember.body.error.message], [notReal.body.error.code, notReal.body.error.message]);
+  // Same-org stays a distinct, honest 400: that is a statement about the caller's own request, not
+  // about whether any other org exists.
+  check('transfer to its own org is still 400 same_org', [ownOrg.status, ownOrg.reason], [400, 'same_org']);
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
 shutDown();
 process.exit(fail === 0 ? 0 : 1);
