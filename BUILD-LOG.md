@@ -698,6 +698,34 @@ job is to end the session did not end it. The fix is one line — the cookie *is
 the route belongs in `PUBLIC_ROUTES` — and it is in the next commit with the family fix, because
 both are about the same thing: I never verified that a security control had a *consequence*.
 
+### The fixes, and the tests that would have caught them
+
+Both of these are now pinned by assertions about the **consequence** rather than the response:
+
+```
+A rotates into B                                  ok
+B rotates into C — C is the live, unspent tip     ok
+replaying a spent ancestor is refused             ok    401
+  ...and the WHOLE family is revoked              ok    was 200
+  ...reported as a used token                     ok
+a new sign-in still works (families are per-lineage, not per-user)   ok
+logout needs no bearer token (the cookie is the credential)          ok    204, was 401
+  ...and the session is gone afterwards            ok    was 200
+  ...including a token rotated out of the same family                 ok
+```
+
+I wrote that block wrong twice before it passed, and both failures are the same mistake: I asserted
+on a cookie I had already spent. Every refresh *consumes* the token it is given, so the lineage is a
+chain — A → B → C, with only the tip live — and a test that refreshes with C and then checks C is
+asserting about a dead token. A test that cannot fail is not evidence, which is the sentence this
+whole phase keeps arriving at.
+
+`POST /auth/logout` is now in `PUBLIC_ROUTES` (the cookie is the credential, so signing out must
+work without a bearer token), revokes the whole **family** rather than one row, and returns **204**
+because there is nothing to say. The console no longer swallows a failed sign-out in a bare
+`catch {}` — if the server cannot be reached it says so on the gate, because a sign-out that
+silently fails is the one failure a user cannot detect for themselves.
+
 ### The pattern across all three
 
 Every one is a check I ran, and none of them was a check that could fail. I asserted the 401 and

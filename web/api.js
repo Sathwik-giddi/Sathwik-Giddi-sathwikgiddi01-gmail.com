@@ -112,6 +112,7 @@ export async function tryRefresh() {
 // --- auth -------------------------------------------------------------------
 
 export const login = (email, password, orgId) => post('/v1/auth/login', { email, password, ...(orgId ? { orgId } : {}) }, { auth: false });
+/** 204, no body. `auth: false` because the refresh cookie is the credential. */
 export const logout = () => post('/v1/auth/logout', {}, { auth: false });
 export const me = () => get('/v1/auth/me');
 

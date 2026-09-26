@@ -93,10 +93,19 @@ export function App() {
   }
 
   async function signOut() {
-    try { await api.logout(); } catch { /* signing out locally is what matters */ }
+    // The local sign-out happens either way — the access token is dropped and the shell unmounts.
+    // But the server call is NOT swallowed: if the refresh cookie survives, a reload signs the
+    // person straight back in, and a sign-out that silently fails is the one failure mode a user
+    // cannot detect. If it fails, say so on the gate.
+    let failed = null;
+    try {
+      await api.logout();
+    } catch (err) {
+      failed = 'Sign-out did not reach the server, so this session may still be active. Reload to find out.';
+    }
     api.clearToken();
     setMe(null);
-    setNotice(null);
+    setNotice(failed);
   }
 
   if (booting) {

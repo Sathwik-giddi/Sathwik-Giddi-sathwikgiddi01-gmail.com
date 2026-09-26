@@ -607,6 +607,61 @@ console.log('\n== malformed input must never be a 500, and never a dead process 
   check('the process survived every one of those requests', (await call('GET', '/auth/me', { token: t })).status, 200);
 }
 
+// =============================================================================
+console.log('\n== the refresh lineage, and sign-out, must have CONSEQUENCES ==');
+{
+  // Every assertion in this block is about what happens AFTER a control fires, not about the
+  // refusal itself. Both bugs it pins had a correct-looking status code and no effect.
+  const jar = async () => {
+    const res = await fetch(`${BASE}/auth/login`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: 'owner@acme.test', password: 'demo1234' }),
+    });
+    return { cookie: res.headers.get('set-cookie').split(';')[0], body: await res.json() };
+  };
+  const cookieOf = (setCookie) => setCookie.split(';')[0];
+
+  // --- replay detection must KILL THE LINEAGE, not just refuse one call ---
+  //
+  // Every refresh SPENDS the cookie it is given and issues a new one, so the lineage is a chain:
+  // A -> B -> C, where A and B are spent and C is the live tip. Burning an ancestor must take the
+  // whole chain with it. (My first version of this block asserted on a cookie it had already spent
+  // two lines earlier -- a test that cannot fail because it never tested the live thing.)
+  const A = (await jar()).cookie;
+  const rotB = await fetch(`${BASE}/auth/refresh`, { method: 'POST', headers: { cookie: A } });
+  const B = cookieOf(rotB.headers.get('set-cookie'));
+  check('A rotates into B', [rotB.status, B.startsWith('rt='), B !== A], [200, true, true]);
+
+  const rotC = await fetch(`${BASE}/auth/refresh`, { method: 'POST', headers: { cookie: B } });
+  const C = cookieOf(rotC.headers.get('set-cookie'));
+  check('B rotates into C — C is the live, unspent tip', [rotC.status, C !== B], [200, true]);
+
+  check('replaying a spent ancestor is refused', (await call('POST', '/auth/refresh', { headers: { cookie: A } })).status, 401);
+
+  // THE ASSERTION THAT MATTERS: the descendant is dead too. Before the fix this was 200, which is
+  // the entire bug -- detection fired and the attacker's lineage carried on working.
+  const afterBurn = await call('POST', '/auth/refresh', { headers: { cookie: C } });
+  check('  ...and the WHOLE family is revoked, not just the replayed row', afterBurn.status, 401);
+  check('  ...reported as a used token, since that is what killed it', afterBurn.body?.error?.message, 'refresh token has already been used');
+
+  // A fresh sign-in is unaffected: the family is per-lineage, not per-user.
+  const fresh = await jar();
+  check('a new sign-in still works (families are per-lineage, not per-user)', (await call('POST', '/auth/refresh', { headers: { cookie: fresh.cookie } })).status, 200);
+
+  // --- sign-out must actually end the session ---
+  const s = await jar();
+  check('logout needs no bearer token (the cookie is the credential)', (await call('POST', '/auth/logout', { headers: { cookie: s.cookie } })).status, 204);
+  const afterLogout = await call('POST', '/auth/refresh', { headers: { cookie: s.cookie } });
+  check('  ...and the session is gone afterwards', afterLogout.status, 401);
+
+  // and a rotated sibling is gone too, not just the presented token
+  const s2 = await jar();
+  const r2 = await fetch(`${BASE}/auth/refresh`, { method: 'POST', headers: { cookie: s2.cookie } });
+  const sibling = cookieOf(r2.headers.get('set-cookie'));
+  await call('POST', '/auth/logout', { headers: { cookie: sibling } });
+  check('  ...including a token rotated out of the same family', (await call('POST', '/auth/refresh', { headers: { cookie: s2.cookie } })).status, 401);
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
 shutDown();
 process.exit(fail === 0 ? 0 : 1);

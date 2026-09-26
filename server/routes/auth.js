@@ -44,17 +44,32 @@ function sessionPayload(db, { user, org, role, permissions }) {
   };
 }
 
-function issueFor(db, secret, { user, orgId, role, permVersion }, res, req) {
+/**
+ * Mint an access token and a refresh token, and set the cookie.
+ *
+ * `familyId` is the whole point of this function's signature. A family is a ROTATION LINEAGE: one
+ * sign-in starts a family, and every subsequent rotation stays inside it. Passing `null` starts a
+ * new family; passing the current one continues it.
+ *
+ * I had this wrong in the most expensive way available. The original read `newId('fam')` here
+ * unconditionally, so EVERY issue started a fresh family and a family was a family of exactly one.
+ * `revokeFamily` on the replay branch therefore matched the single already-revoked row and changed
+ * nothing: replay detection fired, returned 401, and the attacker's rotated token kept working.
+ * Verified before this fix — replay the old cookie (401, as designed) and then refresh with the
+ * new one, and you get 200. The control was inert and both my write-ups claimed it worked.
+ *
+ * The lesson is the assertion, not the code: I had a test for "the replay is refused" and none for
+ * "the lineage is dead". See BUILD-LOG.md, Phase 9.
+ */
+function issueFor(db, secret, { user, orgId, role, permVersion, familyId = null }, res, req) {
   const token = issueAccessToken({ userId: user.id, orgId, role, permVersion }, secret);
 
-  // A fresh refresh family per sign-in. Rotation keeps one family per lineage, so replaying a
-  // spent token can revoke the whole family rather than just that row (AUTH-DATA-MODEL.md §2).
   const raw = newRefreshToken();
   stmt(db, 'insertRefresh').run(
     newId('rt'),
     user.id,
     hashRefreshToken(raw),
-    newId('fam'),
+    familyId ?? newId('fam'),
     new Date(Date.now() + REFRESH_TTL_SECONDS * 1000).toISOString()
   );
   setRefreshCookie(res, raw, REFRESH_TTL_SECONDS, req);
@@ -144,9 +159,15 @@ export function register(router) {
     }
     const membership = stmt(ctx.db, 'membershipByOrgUser').get(org.id, user.id);
 
+    // Rotate INSIDE the family this token belongs to, so a replay can still reach the whole
+    // lineage. `busy` if two refreshes race: the loser finds the row already revoked, which is the
+    // reuse branch above, and the family dies — which is the correct outcome for two concurrent
+    // uses of one refresh token.
     const rotate = ctx.db.transaction(() => {
       stmt(ctx.db, 'revokeRefresh').run(nowIso(), row.id);
-      return issueFor(ctx.db, ctx.secret, { user, orgId: org.id, role: membership.role, permVersion: membership.perm_version }, res, ctx.req);
+      return issueFor(ctx.db, ctx.secret, {
+        user, orgId: org.id, role: membership.role, permVersion: membership.perm_version, familyId: row.family_id,
+      }, res, ctx.req);
     });
 
     const payload = sessionPayload(ctx.db, { user, org, role: membership.role });
@@ -191,15 +212,21 @@ export function register(router) {
   });
 
   // -------------------------------------------------------------------------
-  router.post('/v1/auth/logout', async (ctx, _params, res) => {
-    // Revoking the presented refresh token is the whole of sign-out. The access token is not
-    // revocable and does not need to be: it expires in 15 minutes and the client drops it.
-    const raw = parseCookies(ctx.req)[REFRESH_COOKIE];
+  // Sign-out. The refresh cookie IS the credential here, which is why this route is in
+  // PUBLIC_ROUTES: requiring a bearer token to sign out would mean the one request that must work
+  // without a valid access token is the one that cannot.
+  //
+  // It revokes the whole FAMILY, not just the presented row. A sign-out that revokes one token out
+  // of a rotating lineage leaves the others alive, and "I signed out" has to mean it.
+  router.post('/v1/auth/logout', async (_ctx, _params, res) => {
+    const raw = parseCookies(_ctx.req)[REFRESH_COOKIE];
     if (raw) {
-      const row = stmt(ctx.db, 'refreshByHash').get(hashRefreshToken(raw));
-      if (row) stmt(ctx.db, 'revokeRefresh').run(nowIso(), row.id);
+      const row = stmt(_ctx.db, 'refreshByHash').get(hashRefreshToken(raw));
+      if (row) stmt(_ctx.db, 'revokeFamily').run(nowIso(), row.family_id);
     }
-    clearRefreshCookie(res, ctx.req);
-    return send(res, 200, { ok: true });
+    clearRefreshCookie(res, _ctx.req);
+    // 204: there is nothing to say. `ok: true` was a body describing an absence.
+    res.writeHead(204, { 'cache-control': 'no-store' });
+    res.end();
   });
 }

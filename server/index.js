@@ -31,6 +31,11 @@ const PUBLIC_ROUTES = new Set([
   'POST /v1/auth/refresh',
   'GET /v1/invites/:token',
   'POST /v1/invites/:token/accept',
+  // The refresh cookie is the credential for signing out, so this must work with no bearer token.
+  // It was missing from this list while `web/api.js` called it with `{ auth: false }` — the route
+  // 401'd, the console swallowed it in a bare `catch {}`, and a reload silently signed the person
+  // back in. The control existed, was called, and did nothing.
+  'POST /v1/auth/logout',
 ]);
 
 // ---------------------------------------------------------------------------
