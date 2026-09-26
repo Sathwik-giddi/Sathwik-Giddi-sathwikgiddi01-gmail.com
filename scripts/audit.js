@@ -208,9 +208,15 @@ section('3. Committed or publicly served secrets');
   check('no .env / key / credential file is tracked', suspicious, []);
 
   // Scan tracked source for high-entropy provider key shapes.
-  const PATTERNS = [/sk_live_[0-9a-zA-Z]{10,}/, /pk_live_/, /whsec_[0-9a-zA-Z]{10,}/, /AKIA[0-9A-Z]{16}/, /ghp_[0-9a-zA-Z]{20,}/, /xox[baprs]-[0-9a-zA-Z-]{10,}/, /-----BEGIN [A-Z ]*PRIVATE KEY-----/];
+  //
+  // This scanner is excluded from its own scan, and it has to be: the patterns have to be written
+  // down literally somewhere, and the only sensible place is the file that looks for them. The
+  // first run flagged `scripts/audit.js: /pk_live_/` — a true positive about the file, a false
+  // positive about the repository, and precisely the kind of noise that trains a reader to skip a
+  // scanner's output.
+  const PATTERNS = SECRET_SHAPES;
   const hits = [];
-  for (const f of tracked.filter((f) => /\.(js|jsx|ts|json|md|html|css)$/.test(f))) {
+  for (const f of tracked.filter((f) => /\.(js|jsx|ts|json|md|html|css)$/.test(f) && f !== 'scripts/audit.js')) {
     const src = readFileSync(new URL(`../${f}`, import.meta.url), 'utf8');
     for (const p of PATTERNS) if (p.test(src)) hits.push(`${f}: ${p}`);
   }
@@ -571,7 +577,7 @@ section('15. Verbose errors and exposed debug / API-docs endpoints');
 // ===========================================================================
 section('16. Weak password hashing');
 {
-  const { hashPassword, verifyPassword } = await import(new URL('../server/auth.js', import.meta.url).href);
+  const { hashPassword, verifyPassword, needsRehash } = await import(new URL('../server/auth.js', import.meta.url).href);
   const h = await hashPassword('demo1234');
   check('the stored format names its algorithm', h.split('$')[0], 'scrypt');
   check('each hash uses a fresh salt', (await hashPassword('demo1234')) !== h, true);
@@ -580,7 +586,23 @@ section('16. Weak password hashing');
   check('a truncated stored value is refused, not thrown on', await verifyPassword('demo1234', 'scrypt$abc'), false);
   check('a non-scrypt stored value is refused', await verifyPassword('demo1234', 'md5$a$b'), false);
   check('an empty stored value is refused', await verifyPassword('demo1234', ''), false);
-  check('the derived key is 64 bytes', Buffer.from(h.split('$')[2], 'hex').length, 64);
+  // `scrypt$N$r$p$salt$derived` — the cost is part of the value, so the key is the LAST field and a
+  // positional index that used to be [2] is now [5]. Asserting the layout rather than assuming it is
+  // what caught that, and it is also what makes a future format change fail here.
+  const parts = h.split('$');
+  check('the stored format carries its cost parameters', parts.slice(0, 4), ['scrypt', '16384', '8', '1']);
+  check('the derived key is the last field', Buffer.from(parts.at(-1), 'hex').length, 64);
+  check('the salt is 16 bytes', Buffer.from(parts.at(-2), 'hex').length, 16);
+  // A hash written in the three-part form from before the cost was recorded must still verify —
+  // otherwise the change to the format is a data migration wearing a refactor's clothes.
+  const legacy = `scrypt$${parts.at(-2)}$${parts.at(-1)}`;
+  check('a pre-format-change hash still verifies', await verifyPassword('demo1234', legacy), true);
+  check('and it is flagged for rehash', needsRehash(legacy), true);
+  check('a current hash is not flagged', needsRehash(h), false);
+  // The cost fields go straight into a memory allocation, so a hostile row cannot ask for a
+  // degenerate cost that is cheaper than the comparison it is supposed to make expensive.
+  check('a stored N of 1 is refused', await verifyPassword('x', `scrypt$1$8$1$aa$${'00'.repeat(64)}`), false);
+  check('a non-numeric cost is refused', await verifyPassword('x', `scrypt$abc$8$1$aa$${'00'.repeat(64)}`), false);
   const N = /maxmem/.test(readFileSync(new URL('../server/auth.js', import.meta.url), 'utf8'));
   check('explicit cost parameters are set (not defaults-by-accident)', N, true);
 
@@ -683,6 +705,74 @@ section('event-loop responsiveness under password-hash load');
 }
 
 // ===========================================================================
+// ===========================================================================
+section('latency budget, measured over real HTTP');
+// Latency is a security property here, not only a UX one: an endpoint that is slow under load is an
+// endpoint an attacker can hold open. The budget is measured against a running production server
+// rather than asserted, because a budget nobody measures is a wish.
+//
+// The two classes get separate budgets for a reason. `POST /auth/login` pays ~36ms of scrypt on
+// purpose — that is the cost of not being brute-forceable offline — so it is given its own ceiling
+// and its own regression test. Everything else should be single-digit milliseconds, and a budget
+// that let the list endpoints drift up to 200ms would permit a 100x regression and still pass.
+{
+  const BUDGET = { auth: 200, read: 50, write: 80 };
+  const loginR = await call('POST', '/v1/auth/login', { body: { email: 'dana@example.test', password: 'demo1234' } });
+  if (loginR.status !== 200) { check('could not measure login latency', loginR.status, 200); }
+  else {
+    const samples = [];
+    for (let i = 0; i < 12; i++) {
+      const t = Date.now();
+      await call('POST', '/v1/auth/login', { body: { email: 'dana@example.test', password: 'demo1234' } });
+      samples.push(Date.now() - t);
+    }
+    samples.sort((a, b) => a - b);
+    const p50 = samples[Math.floor(samples.length * 0.5)];
+    const p95 = samples[Math.min(samples.length - 1, Math.floor(samples.length * 0.95))];
+    console.log(`         POST /auth/login      p50 ${p50}ms  p95 ${p95}ms  (budget ${BUDGET.auth}ms)`);
+    check('login p50 is inside its budget', p50 < BUDGET.auth, true);
+    check('login p95 is inside its budget', p95 < BUDGET.auth, true);
+    // The KDF has to still be there. A latency win bought by removing the hash is a security
+    // regression that reads as an improvement on a dashboard, so the floor is asserted too.
+    check('and login is still paying for a real KDF (not fast because it stopped hashing)', p50 > 5, true);
+  }
+
+  const reads = [
+    ['GET', '/v1/auth/me'],
+    ['GET', '/v1/orgs/org_acme/devices'],
+    ['GET', '/v1/orgs/org_acme/members'],
+    ['GET', '/v1/orgs/org_acme/audit?limit=50'],
+    ['GET', '/v1/orgs/org_acme/grants'],
+  ];
+  for (const [m, p] of reads) {
+    const samples = [];
+    for (let i = 0; i < 12; i++) {
+      const t = Date.now();
+      const r = await call(m, p, { token: acmeOwner });
+      samples.push(Date.now() - t);
+      if (r.status !== 200) { check(`${m} ${p} answered 200 while measuring`, r.status, 200); break; }
+    }
+    samples.sort((a, b) => a - b);
+    const p95 = samples[Math.min(samples.length - 1, Math.floor(samples.length * 0.95))];
+    console.log(`         ${(m + ' ' + p).padEnd(38)} p95 ${String(p95).padStart(3)}ms  (budget ${BUDGET.read}ms)`);
+    check(`${m} ${p} p95 is inside its budget`, p95 < BUDGET.read, true);
+  }
+
+  // The device list is the one the brief singles out, and the one an N+1 would quietly ruin as the
+  // org grows. Cheap to assert here; expensive to notice in production.
+  const one = await call('GET', '/v1/orgs/org_acme/devices', { token: acmeOwner });
+  const devices = one.body?.devices?.length ?? 0;
+  const scaled = [];
+  for (let i = 0; i < 8; i++) {
+    const t = Date.now();
+    await call('GET', '/v1/orgs/org_acme/devices', { token: acmeOwner });
+    scaled.push(Date.now() - t);
+  }
+  const worst = Math.max(...scaled);
+  console.log(`         device list (${devices} devices, ${worst}ms worst of 8) — must not scale with row count`);
+  check('the device list stays inside its budget', worst < BUDGET.read, true);
+}
+
 // ===========================================================================
 section('audit coverage: every action a route can emit is a declared action');
 // Not one of the 17, but it is the check that keeps them honest, and it came out of a dead-code

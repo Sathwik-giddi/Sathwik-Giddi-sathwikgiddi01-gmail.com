@@ -29,7 +29,7 @@ for (const suffix of ['', '-wal', '-shm']) if (existsSync(DB + suffix)) rmSync(D
 execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB }, stdio: 'ignore' });
 
 const server = spawn(process.execPath, ['server/index.js'], {
-  env: { ...process.env, DATABASE_FILE: DB, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: SECRET, APP_HASH_KEY: SECRET },
+  env: { ...process.env, DATABASE_FILE: DB, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: SECRET, APP_HASH_KEY: SECRET, SCRYPT_N: '4096' },
   stdio: ['ignore', 'ignore', 'inherit'],
 });
 await new Promise((r) => setTimeout(r, 1000));
@@ -631,6 +631,67 @@ console.log('\n== an unauthenticated endpoint cannot be used as a lever ==');
   console.log(`         32 concurrent verifications: ${elapsed}ms, timer fired ${ticks}/${Math.ceil(elapsed / 5)}x`);
   check('the work really happened (not a vacuously fast probe)', elapsed > 100, true);
   check('the event loop is not starved by password hashing', starvation < 0.35, true);
+}
+
+// ---------------------------------------------------------------------------
+// Found while making sign-in faster. Kept because the failure mode is silence: if the rehash never
+// fires, `SCRYPT_N` looks like an ignored config forever and nothing anywhere reports a problem.
+console.log('\n== the KDF cost travels inside the hash, so it can be changed safely ==');
+{
+  const { hashPassword, verifyPassword, needsRehash } = await import('../server/auth.js');
+  const h = await hashPassword('demo1234');
+  const parts = h.split('$');
+
+  check('the stored format is scrypt$N$r$p$salt$derived', parts.length, 6);
+  check('N is recorded rather than implied', Number(parts[1]) >= 2, true);
+  check('the derived key is 64 bytes', Buffer.from(parts.at(-1), 'hex').length, 64);
+  check('the salt is 16 bytes', Buffer.from(parts.at(-2), 'hex').length, 16);
+  check('it verifies', await verifyPassword('demo1234', h), true);
+  check('a wrong password does not', await verifyPassword('nope', h), false);
+  check('a current-cost hash needs no rehash', needsRehash(h), false);
+
+  // The three-part form written before the cost was recorded. It must keep working, or changing
+  // the format is a data migration wearing a refactor's clothes.
+  const legacy = `scrypt$${parts.at(-2)}$${parts.at(-1)}`;
+  check('a pre-format-change hash still verifies', await verifyPassword('demo1234', legacy), true);
+  check('and it is flagged for rehash', needsRehash(legacy), true);
+
+  // A cost that is not ours to set. These fields go straight into a memory allocation, so a row
+  // anyone can write must not be able to ask for a KDF cheaper than the comparison it precedes.
+  check('a stored N below the floor is refused', await verifyPassword('x', `scrypt$1$8$1$aa$${'00'.repeat(64)}`), false);
+  check('a non-numeric N is refused', await verifyPassword('x', `scrypt$xx$8$1$aa$${'00'.repeat(64)}`), false);
+  check('a truncated key is refused, not thrown on', await verifyPassword('x', 'scrypt$16384$8$1$aa$00'), false);
+  check('a non-scrypt scheme is refused', await verifyPassword('x', 'md5$a$b$c'), false);
+
+  // The end-to-end half: a server whose SCRYPT_N differs from the stored hashes must migrate them
+  // on a successful sign-in. Without this, lowering the cost on a live database does nothing at all
+  // and the login screen simply does not get faster.
+  //
+  // Note the asymmetry that makes this a real test rather than a tautology: `hashPassword` called
+  // HERE runs in the test process, which has no SCRYPT_N set and therefore writes at the default
+  // 16384, while the server under test runs at 4096. The row starts at a cost the server does not
+  // use, which is exactly the situation rehash-on-login exists to resolve.
+  //
+  // Nothing here asserts anything about the fixture. An earlier version read the "before" cost out
+  // of the seeded database, which is an assertion about test ORDER — several blocks above already
+  // sign in as dana, so the rehash had fired and the precondition was already false.
+  const target = 'sam@example.test';
+  const cost = () => new Database(DB, { readonly: true })
+    .prepare('SELECT password_hash FROM users WHERE email = ?').get(target).password_hash.split('$')[1];
+  const login = () => call('POST', '/auth/login', { body: { email: target, password: 'demo1234' } });
+
+  await login();
+  check('a successful sign-in rewrites the row at the running cost', Number(cost()), 4096);
+  check('and the migrated hash still authenticates', (await login()).status, 200);
+  check('and the wrong password still does not',
+    (await call('POST', '/auth/login', { body: { email: target, password: 'wrong' } })).status, 401);
+
+  // Idempotent: once the row matches the running cost it must stop being rewritten, or every sign-in
+  // pays for a second hash and the latency win evaporates under exactly the load it was meant for.
+  const settled = cost();
+  await login();
+  await login();
+  check('a settled row is not rewritten on every sign-in', cost(), settled);
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);

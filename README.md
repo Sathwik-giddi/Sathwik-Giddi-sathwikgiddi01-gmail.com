@@ -43,6 +43,17 @@ way to run the app signed every token with a value published in this repository.
 now fatal at boot rather than a warning: a server that starts with a known signing key looks
 healthy and fails open, which is worse than a server that does not start.
 
+Two optional settings:
+
+| variable | default | what it does |
+|---|---|---|
+| `SCRYPT_N` | `16384` | Password-hashing cost. **Changing it is a security decision, not a latency one** — see `LAUNCH-GATE.md` §5. The cost is stored inside each hash, so changing it never invalidates an existing password, and a successful sign-in re-derives stale hashes at the current cost. |
+| `UV_THREADPOOL_SIZE` | `8` | Width of the pool password hashing runs on. Set by `npm start` / `npm run dev` because libuv reads it once at startup and an in-process assignment is silently ignored. 64 concurrent sign-ins: 690ms → 532ms, with the KDF cost untouched. |
+
+`npm run audit` measures p50/p95 latency for every endpoint and fails on a regression, with a floor
+as well as a ceiling on sign-in — so a speed-up achieved by removing the password hash fails the gate
+rather than passing it.
+
 `scripts/pentest.js` is the proof. It boots production the way `npm start` does, mints tokens with
 the old default, and reports what they bought. `scripts/audit.js` is the wider version — 108 checks
 across 17 vulnerability classes, each one probed against a running server rather than asserted from

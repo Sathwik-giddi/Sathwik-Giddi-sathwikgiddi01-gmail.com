@@ -37,7 +37,7 @@ npm test          # 38 browser tests — the rendered console
 | 13 | Unverified Stripe webhooks | High | **n/a** | No payment route and no payment SDK. The audit asserts both, so adding billing later makes this line fail rather than silently stay "n/a". |
 | 14 | Insecure file uploads | Med | **n/a** | No upload handling and no filesystem write in any request handler. The only persistent write is SQLite. |
 | 15 | Verbose errors / exposed debug surface | Low | **clean** | One envelope — `{ code, message, reason, requestId }` — identical across 400/401/403/404. An internal error collapses to `internal error` with the stack going only to the server log; asserted directly against the sanitiser with a fake error carrying `password=hunter2`. No debug, docs, metrics or health route. An `/v1` miss is JSON, never HTML. |
-| 16 | Weak password hashing | Med | **fixed in Phase 11** | scrypt with a per-hash 16-byte salt, 64-byte derived key, explicit cost parameters, constant-time compare, and a malformed stored value refused rather than thrown on. It also no longer runs on the event loop. |
+| 16 | Weak password hashing | Med | **fixed in Phase 11, tuned in 11a** | scrypt with a per-hash 16-byte salt, 64-byte derived key, constant-time compare, and a malformed or hostile stored value refused rather than thrown on. Off the event loop. The cost now travels **inside** the hash (`scrypt$N$r$p$salt$derived`), so it can be changed without a data migration, and rehash-on-login migrates a live database one sign-in at a time. Default `N=16384` deliberately unchanged — see the note under §5. |
 | 17 | Hallucinated packages (slopsquatting) | High | **clean** | 6 declared packages, each verified to resolve to a registry entry whose own `name` matches — the slopsquat signature is a real package under a lookalike name, so name identity is the test. Lockfile committed with integrity hashes on all 157 packages. `npm audit`: none. |
 
 ### Two bugs found inside my own fix for #8
@@ -150,6 +150,15 @@ three was a test that passed while the thing it tested was broken.
   that do not exist, so no `scrypt` ran, and it reported "11ms" with the blocking version in place.
   Rewritten to hash a real credential: 554ms and responsive, versus 2015ms and a timer that fired
   **0 times out of 203**.
+- **A control set in the wrong place.** `UV_THREADPOOL_SIZE` assigned in the module body of
+  `server/index.js`, because libuv reads it once at threadpool creation and the module body runs
+  after every import. It measured 654ms against a 616ms default: present in the source, inert at
+  runtime. Now set in `npm start` / `npm run dev`, where it is a real environment variable of a real
+  process.
+- **A test harness that never passed the variable it was testing.** Three runs at `SCRYPT_N` of
+  16384, 8192 and 4096 all returned 35ms, which looked like the knob not working. The knob worked;
+  the harness had not forwarded it to the server. The kind of bug that gets "fixed" by reverting
+  working code.
 - **A comment asserting a property nothing checked.** `AUDITED_ACTIONS` was frozen and documented as
   "stated once, because the alternative is deciding per route and drifting" — and read by nothing.
   Making `audit()` consult it failed a test on the first run, because `audit.read` was being emitted
@@ -158,3 +167,34 @@ three was a test that passed while the thing it tested was broken.
 
 The rule that came out of all three, and the one this gate is built on: **a check is not finished
 when it passes. It is finished when it has been seen to fail for the right reason.**
+
+## 5 · The one knob that trades latency against security
+
+`SCRYPT_N` controls the cost of deriving a password hash, and it is the only setting in this
+repository where "make it faster" and "make it weaker" are literally the same request:
+
+| `SCRYPT_N` | memory | single sign-in | 64 concurrent | offline cost to attack |
+|---|---|---|---|---|
+| **16384** (default) | 16 MB | 35 ms | 414 ms | baseline |
+| 8192 | 8 MB | 18 ms | 213 ms | 2.75× cheaper |
+| 4096 | 4 MB | 10 ms | 102 ms | 5.9× cheaper |
+| 2048 | 2 MB | 6 ms | 57 ms | 11.7× cheaper |
+
+**The default is not moved.** These parameters decide what a stolen `password_hash` column costs to
+crack offline, which is a risk decision rather than a latency one, and an application should not make
+it silently because a login screen was slow. Setting `SCRYPT_N` is a deliberate act by whoever
+deploys it.
+
+The thing that makes it safe to set at all: the cost is stored **inside** each hash, so changing it
+never invalidates an existing password, and `POST /auth/login` re-derives a stale hash at the
+current cost on the next successful sign-in. A deployment migrates its own password column
+incrementally, in whichever direction, with no downtime and no locked-out accounts.
+
+A latency budget now guards the result — 200ms p95 for login, 50ms p95 for the read endpoints,
+measured over real HTTP in `npm run audit`, with a **floor** as well as a ceiling on login so that a
+speed-up achieved by removing the hash fails the gate.
+
+`UV_THREADPOOL_SIZE=8` (set in `npm start` and `npm run dev`) is the free half: 690ms → 532ms for a
+64-way burst with the KDF cost untouched. It cannot be set from inside the process, because libuv
+reads it once at threadpool creation — an in-process assignment measured 654ms against a 616ms
+default, looking like it worked and doing nothing.

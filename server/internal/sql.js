@@ -77,6 +77,9 @@ const SQL = {
 
   // --- invites ---
   insertUser: `INSERT INTO users (id, email, name, password_hash) VALUES (?,?,?,?)`,
+  // Rehash-on-login. Deliberately keyed by user id and NOT by email: the id is the primary key, so
+  // this touches exactly one row and cannot be redirected by a case-variant or a trailing space.
+  rehashUser: `UPDATE users SET password_hash = ? WHERE id = ?`,
   insertMembership: `INSERT INTO memberships (id, org_id, user_id, role, status, invited_by, joined_at) VALUES (?,?,?,?,'active',?,?)`,
   insertInvite: `
     INSERT INTO invites (id, org_id, email, role, token_hash, invited_by, expires_at)

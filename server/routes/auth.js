@@ -18,7 +18,7 @@
 import { send, unauthenticated, forbidden, notFound, badRequest, tooManyRequests } from '../http.js';
 import { attempt, succeed, fail } from '../ratelimit.js';
 import { apiHeaders } from '../headers.js';
-import { verifyPassword, issueAccessToken, newRefreshToken, hashRefreshToken, REFRESH_TTL_SECONDS } from '../auth.js';
+import { verifyPassword, hashPassword, needsRehash, issueAccessToken, newRefreshToken, hashRefreshToken, REFRESH_TTL_SECONDS } from '../auth.js';
 import { stmt } from '../internal/sql.js';
 import { newId, nowIso } from '../db.js';
 import { requireEmail, requireString, parseCookies, setRefreshCookie, clearRefreshCookie, REFRESH_COOKIE, LIMITS } from '../internal/http.js';
@@ -105,6 +105,30 @@ export function register(router) {
       throw unauthenticated(GENERIC_LOGIN_FAILURE);
     }
     succeed(ctx.req, email);
+
+    // Rehash-on-login, and the reason the KDF cost lives inside the stored value.
+    //
+    // `SCRYPT_N` only affects hashes written AFTER it is set, because verification deliberately
+    // reads the cost back out of the stored hash — that is what stops a cost change from bricking
+    // every existing password. The cost of that safety is that lowering N appears to do nothing to
+    // a database that already exists, which is a confusing thing to ship.
+    //
+    // This closes the gap: a successful sign-in re-derives the hash at the current cost, so a
+    // deployment migrates its own password column one sign-in at a time. No downtime, no migration
+    // script, no locked-out users, and it works in both directions — raising N to harden an
+    // existing install is the same three lines.
+    //
+    // It runs AFTER the credential is proven, on a string the caller already supplied in the clear,
+    // and it is not audited: nothing about the caller's authority changed, only the encoding of a
+    // secret they already hold. A failure here is swallowed on purpose — a rehash that fails must
+    // not turn a correct password into a 500.
+    if (user && needsRehash(user.password_hash)) {
+      try {
+        stmt(ctx.db, 'rehashUser').run(await hashPassword(password), user.id);
+      } catch (err) {
+        console.error('[auth] rehash-on-login failed for', user.id, err?.message ?? err);
+      }
+    }
 
     const requested = ctx.body.orgId;
     let org;

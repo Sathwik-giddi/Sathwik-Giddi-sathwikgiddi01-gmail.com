@@ -1046,6 +1046,113 @@ is always the same: **the assertion stops one step short of the thing you actual
   credential for a *different organization* than the one you were in. I had written this up as a
   harmless schema consequence; it is a credential-scope change, which is a different category.
 
+## Phase 11a — making sign-in faster without pretending the KDF is free
+
+Asked to reduce latency. The only slow endpoint is `POST /auth/login` at 35ms; everything else is
+1.5-2ms. So this is about the KDF, and there were two levers with very different prices.
+
+### The free one: threadpool width, which cannot be set from inside the process
+
+64 concurrent sign-ins took ~700ms. That is 2925ms of CPU spread over libuv's default 4 workers,
+so the burst time is `work / pool`. Measured:
+
+| pool | 64 sign-ins |
+|---|---|
+| 4 (libuv default) | 690 ms |
+| 8 | **532 ms** |
+| 16 | 495 ms |
+
+1.3x, not the 2x the arithmetic predicts, and the reason is worth having: each derivation touches
+16 MB, so past about six concurrent hashes the limit is memory bandwidth rather than thread count.
+That is also why 16 is barely better than 8, and why `npm start` sets 8 rather than one thread per
+core — a 64-core machine would otherwise be invited to allocate a gigabyte of scrypt buffers.
+
+**And libuv reads `UV_THREADPOOL_SIZE` once, at threadpool creation.** The first attempt assigned it
+in the module body of `server/index.js`, which measured 654ms against a 616ms default: it looked like
+it worked and did nothing. Removed, and set in `npm start` / `npm run dev` where it is a real
+environment variable of a real process. That is the fifth time in this repository a control looked
+present and enforced nothing, and the reason it is now in a place that cannot silently fail.
+
+### The one that is not free: the cost parameter
+
+`N=16384` is 45.7ms of scrypt. The curve is steep and it is not linear in the tradeoff:
+
+| N | memory | single login | 64 concurrent |
+|---|---|---|---|
+| 16384 (default) | 16 MB | 35 ms | 414 ms |
+| 8192 | 8 MB | 18 ms | 213 ms |
+| 4096 | 4 MB | 10 ms | 102 ms |
+| 2048 | 2 MB | 6 ms | 57 ms |
+
+N=8192 is 2.75x cheaper to attack offline AND 2.75x faster, so "make login fast" and "make passwords
+weaker" are the same request. **The default is therefore unchanged at 16384.** These parameters
+decide what a stolen `password_hash` column costs to crack, and that is a risk decision, not a
+latency one — the application should not quietly make it because a login screen was slow.
+`SCRYPT_N` moves it per deployment, and whoever sets it owns the consequence.
+
+### A latent bug the request exposed
+
+The cost lived only in `server/auth.js` and the stored hash was `scrypt$salt$derived`. So changing
+N in either direction would have made **every already-stored password unverifiable** — a cost you
+cannot change without a data migration is not a parameter, it is a constant that looks like one.
+Raising N to harden an install would have bricked it just as surely as lowering it to speed it up.
+
+The stored form is now `scrypt$N$r$p$salt$derived`. Verification reads the parameters back out, so a
+hash written at one cost verifies at that cost forever. The three-part form is still accepted, so
+hashes written before the change keep working — asserted, because a format change that quietly
+requires a migration is a migration wearing a refactor's clothes.
+
+`maxmem` is now derived from `128 * N * r` rather than fixed, because Node silently clamps the cost
+when `maxmem` is too small, and a clamped cost looks exactly like a change that did nothing.
+
+### The gap that design created, and the fix
+
+Cost-in-the-hash means `SCRYPT_N` only affects hashes written *after* it is set — verification
+correctly uses each row's own cost. Which means lowering it on a live database does nothing at all,
+and the login screen does not get faster while the config looks ignored. That is the most confusing
+possible behaviour for a latency knob, and my own test harness fell into exactly it: three runs at
+three different N all returned 35ms, and the cause was that the harness never passed the variable to
+the server.
+
+Rehash-on-login closes it. A successful sign-in re-derives the hash at the current cost, so a
+deployment migrates its own password column one sign-in at a time — no downtime, no script, no locked
+out users — and it works in **both** directions, which is what makes hardening an existing install
+the same three lines. It runs after the credential is proven, on a password the caller already
+supplied in the clear, is not audited (nothing about the caller's authority changed), and a failure
+is swallowed rather than turned into a 500 for a correct password.
+
+Measured end to end on a fresh database, single sign-in p50 and a 64-way burst:
+
+```
+SCRYPT_N=16384   35ms   414ms      <- default, unchanged
+SCRYPT_N= 8192   18ms   213ms
+SCRYPT_N= 4096   10ms   102ms
+SCRYPT_N= 2048    6ms    57ms
+```
+
+### A latency budget, so it stays fast
+
+`npm run audit` now measures p50/p95 over real HTTP for the login route and five read endpoints, and
+fails on a regression. Two budgets, because one number for both would be meaningless: 200ms for
+login, which pays 35ms of scrypt on purpose, and 50ms for reads, which are 2ms — a 200ms read budget
+would permit a 100x regression and still pass.
+
+The budget also asserts a **floor** on login latency. A latency win bought by removing the password
+hash is a security regression that looks like an improvement on a dashboard, so `p50 > 5ms` is
+asserted alongside `p50 < 200ms`. Verified by injecting a 300ms sleep into the login handler: the
+gate fails and `npm run audit` exits 1.
+
+### Two of my own test bugs, both the same shape
+
+The audit's secret scanner flagged **`scripts/audit.js` itself** — it contains the key patterns
+because it is the file that searches for them. A true positive about the file, a false positive
+about the repository, and exactly the noise that trains a reader to ignore a scanner.
+
+The KDF test asserted `h.split('$')[2]` was the derived key, which was correct for the old
+three-part format and silently became the `r` parameter. It now asserts the whole layout, and adds
+the legacy-format, hostile-cost and rehash checks — so a future format change fails there rather
+than as a mysterious "wrong password" in production.
+
 ## Phase 11 — the launch gate: 17 classes, 3 real findings, 2 in my own fix
 
 Phase 10 attacked the signing path. This phase ran a 17-class vulnerability sweep against a running

@@ -664,6 +664,62 @@ because three of the twenty-nine actions are produced by a ternary assigned to a
 literal-shaped regex reported them as "declared but never emitted". A check that cries wolf gets
 ignored, which is the same failure as one that cries wolf in the other direction.
 
+### The KDF cost lives inside the hash, and the default does not move
+
+**What I chose:** the stored form is `scrypt$N$r$p$salt$derived`. Verification reads the parameters
+back out, `SCRYPT_N` sets the default for *new* hashes, and a successful sign-in re-derives a stale
+hash at the current cost. **The default stays at N=16384.**
+
+**Why:** asked to make sign-in faster, I went looking for the lever and found a latent bug on the
+way. The cost lived only in `server/auth.js` and the stored value was `scrypt$salt$derived`, so
+changing N in *either* direction would have made every already-stored password unverifiable. Raising
+it to harden an install would have bricked the install exactly as surely as lowering it to speed up
+sign-in. A cost you cannot change without a data migration is not a parameter; it is a constant
+that happens to look like one.
+
+Carrying N in the hash makes the change safe in both directions, and rehash-on-login is what makes it
+*take effect* — without it, `SCRYPT_N` only affects new accounts, so lowering it on a live database
+does nothing and the login screen does not get faster while the config looks ignored. My own
+measurement harness fell into precisely that trap: three runs at three different N all returned
+35ms, because the harness had never forwarded the variable to the server.
+
+**What I rejected:** lowering the default. This is the part I would argue for. N=8192 is 2.75x
+cheaper to attack offline *and* 2.75x faster — the tradeoff is not linear and the two goals are the
+same request, so there is no version of "make login fast" that is not also "make passwords weaker".
+These parameters decide what a stolen `password_hash` column costs to crack, which is a risk
+decision, and the risk belongs to whoever deploys it rather than to a login screen feeling slow.
+The knob is explicit; the default is not moved.
+
+**What would change my mind:** a deployment with a stated, written-down threat model in which the
+offline cost of the password column does not matter — a local demo, a fixture with published
+passwords, anything where the database is not the asset. Then `SCRYPT_N=4096` is simply correct and
+the default should follow. I would want that in writing rather than inferred from a latency
+complaint.
+
+`maxmem` is derived from `128 * N * r` rather than fixed, because Node silently clamps the cost when
+`maxmem` is short — and a clamped cost is indistinguishable from a change that did nothing, which is
+the same trap one level down.
+
+### A latency budget with a floor as well as a ceiling
+
+**What I chose:** `npm run audit` measures p50/p95 over real HTTP for login and five read endpoints.
+Budgets are 200ms for login and 50ms for reads, and the login budget asserts `p50 > 5ms` as well as
+`p50 < 200ms`.
+
+**Why:** two numbers because one would be meaningless — a 200ms read budget would permit a 100x
+regression and still pass, and a 5ms login budget would fail the moment anyone touched the KDF. The
+floor is the part I would defend hardest: a latency win bought by removing the password hash is a
+security regression that looks like an improvement on a dashboard, and no ceiling can catch it. Both
+sides have to be asserted or one of them is theatre.
+
+**What I rejected:** asserting on `measure.js`'s in-process timings. It bypasses the HTTP layer, so
+it cannot see a slow response path, a serialised write, or a header that costs something to build.
+
+**What would change my mind:** a real deployment with a latency SLO. Then the budget belongs in
+config and in a monitoring alert rather than in a test, and a test that fails on a slow CI runner is
+worse than no test. Both are true today — the budget here is a regression guard for a single-process
+demo, and it is labelled as one.
+
 ## Deliberately not built
 
 Stated now for the things already decided; this section grows as the build does.

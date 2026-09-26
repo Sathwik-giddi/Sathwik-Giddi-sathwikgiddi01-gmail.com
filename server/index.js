@@ -22,6 +22,26 @@ const PORT = Number(process.env.PORT ?? 8080);
 const DIST = new URL('../dist/', import.meta.url).pathname;
 
 /**
+ * libuv's threadpool width is the throughput lever for password hashing, and it CANNOT be set from
+ * here. libuv captures `UV_THREADPOOL_SIZE` once, when the threadpool is first created, so
+ * assigning `process.env` in this module body is silently ignored — measured 654ms for 64 sign-ins
+ * with the assignment in place, against 616ms with the default. It looks like it works, which is
+ * worse than not having it. `npm start` and `npm run dev` set it, where it is a real environment
+ * variable of a real process; a bare `node server/index.js` gets libuv's default of 4.
+ *
+ * Measured, 64 concurrent sign-ins, KDF cost unchanged:
+ *
+ *     pool  4 ->  690 ms      <- libuv default
+ *     pool  8 ->  532 ms
+ *     pool 16 ->  495 ms
+ *
+ * 1.3x, not the 2x the arithmetic predicts (2925ms of CPU over 4 workers would be ~730ms, over 8
+ * ~366ms). Each derivation touches 16 MB, so past about six concurrent hashes the limit is memory
+ * bandwidth rather than thread count — which is also why 16 is not obviously better than 8, and why
+ * a 64-core machine should not be handed a thread per core. 8 is the default in the scripts.
+ */
+
+/**
  * A required secret, or a refusal to start.
  *
  * This used to be `process.env.JWT_SECRET ?? 'dev-secret-change-me'`, and that fallback was
