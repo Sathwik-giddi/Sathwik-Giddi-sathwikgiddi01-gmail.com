@@ -33,11 +33,14 @@ and this is deliberate:
 ```sh
 export JWT_SECRET=$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))")
 export APP_HASH_KEY=$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))")
+export PASSWORD_PEPPER=$(node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))")
 npm start
 ```
 
 `JWT_SECRET` signs access tokens. `APP_HASH_KEY` HMACs refresh and invite tokens before they are
-stored. Both used to fall back to a literal in the source, and both fallbacks were reachable in
+stored. `PASSWORD_PEPPER` is mixed into every password before hashing — without it, a stolen
+`password_hash` column is a crackable column, and no amount of KDF cost changes that, because cost only
+buys time and time is exactly what an offline attacker has. Both used to fall back to a literal in the source, and both fallbacks were reachable in
 production because `npm start` sets `NODE_ENV=production` without setting them — so the documented
 way to run the app signed every token with a value published in this repository. A missing key is
 now fatal at boot rather than a warning: a server that starts with a known signing key looks
@@ -47,6 +50,7 @@ Two optional settings:
 
 | variable | default | what it does |
 |---|---|---|
+| `PASSWORD_PEPPER` | *(required)* | Absorbed into every password before hashing, so a stolen `password_hash` column cannot be attacked at all without the server secret — at any KDF cost. Measured cost: none (−0.4%). **Losing it invalidates every stored password**, so back it up with `JWT_SECRET`. Rotation is a config change: set `PASSWORD_PEPPER_PREVIOUS` alongside the new value. |
 | `SCRYPT_N` | `16384` | Password-hashing cost. **Changing it is a security decision, not a latency one** — see `LAUNCH-GATE.md` §5. The cost is stored inside each hash, so changing it never invalidates an existing password, and a successful sign-in re-derives stale hashes at the current cost. |
 | `UV_THREADPOOL_SIZE` | `8` | Width of the pool password hashing runs on. Set by `npm start` / `npm run dev` because libuv reads it once at startup and an in-process assignment is silently ignored. 64 concurrent sign-ins: 690ms → 532ms, with the KDF cost untouched. |
 

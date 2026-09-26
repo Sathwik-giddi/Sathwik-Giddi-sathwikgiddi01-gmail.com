@@ -23,10 +23,10 @@ const SECRET = 'http-seams-secret';
 
 for (const suffix of ['', '-wal', '-shm']) if (existsSync(DB + suffix)) rmSync(DB + suffix);
 const { execFileSync } = await import('node:child_process');
-execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB }, stdio: 'ignore' });
+execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB, PASSWORD_PEPPER: 'test-pepper' }, stdio: 'ignore' });
 
 const server = spawn(process.execPath, ['server/index.js'], {
-  env: { ...process.env, DATABASE_FILE: DB, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: SECRET, APP_HASH_KEY: SECRET },
+  env: { ...process.env, DATABASE_FILE: DB, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: SECRET, APP_HASH_KEY: SECRET, PASSWORD_PEPPER: 'test-pepper'},
   stdio: ['ignore', 'ignore', 'inherit'],
 });
 await new Promise((r) => setTimeout(r, 1000));

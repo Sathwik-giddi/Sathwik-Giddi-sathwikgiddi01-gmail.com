@@ -32,6 +32,9 @@ export default defineConfig({
       // because a known key makes the stored refresh/invite token hashes reproducible by anyone
       // holding the database. `JWT_SECRET` alone is no longer enough to start the test server.
       APP_HASH_KEY: 'e2e-hash-key',
+      // Same again, and this one is load-bearing for security rather than hygiene: without a pepper
+      // the `password_hash` column is crackable offline on its own, whatever the KDF cost.
+      PASSWORD_PEPPER: 'e2e-pepper',
     },
   },
 });

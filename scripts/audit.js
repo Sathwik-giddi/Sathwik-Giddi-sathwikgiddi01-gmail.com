@@ -29,14 +29,23 @@ const PORT = 8188;
 const BASE = `http://localhost:${PORT}`;
 const DB = 'audit.db';
 const SECRET = 'audit-secret';
+// Section 16 calls hashPassword in THIS process, not over HTTP, so the pepper belongs here as well
+// as on the spawned server. Asserting on the wrong shape is worse than not asserting: a pepperless
+// process writes the six-part form, which would have made the seven-part assertion below fail for a
+// reason that had nothing to do with the format.
+const PEPPER = 'audit-pepper';
+process.env.PASSWORD_PEPPER = PEPPER;
+// The pepper is part of the HASH, not just of verification, so the fixture loader and the
+// server must be given the SAME one. Seed with one pepper and serve with another and nobody can
+// sign in -- which is a real operational property of peppering, not a harness detail.
 
 for (const s of ['', '-wal', '-shm']) if (existsSync(DB + s)) rmSync(DB + s);
-execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB }, stdio: 'ignore' });
+execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB, PASSWORD_PEPPER: PEPPER }, stdio: 'ignore' });
 
 const server = spawn(process.execPath, ['server/index.js'], {
   env: {
     ...process.env, DATABASE_FILE: DB, PORT: String(PORT),
-    NODE_ENV: 'production', JWT_SECRET: SECRET, APP_HASH_KEY: SECRET,
+    NODE_ENV: 'production', JWT_SECRET: SECRET, APP_HASH_KEY: SECRET, PASSWORD_PEPPER: PEPPER,
     // A low, known limit so the rate limiter is observable inside a test run instead of needing
     // 300 requests. The production defaults are asserted separately in check-hardening.js.
     RATE_LIMIT_FAILURES: '4', RATE_LIMIT_WINDOW_MS: '60000',
@@ -586,23 +595,40 @@ section('16. Weak password hashing');
   check('a truncated stored value is refused, not thrown on', await verifyPassword('demo1234', 'scrypt$abc'), false);
   check('a non-scrypt stored value is refused', await verifyPassword('demo1234', 'md5$a$b'), false);
   check('an empty stored value is refused', await verifyPassword('demo1234', ''), false);
-  // `scrypt$N$r$p$salt$derived` — the cost is part of the value, so the key is the LAST field and a
-  // positional index that used to be [2] is now [5]. Asserting the layout rather than assuming it is
-  // what caught that, and it is also what makes a future format change fail here.
+  // `scrypt$N$r$p$<pepperId>$salt$derived`. The cost AND the pepper identity are part of the value,
+  // so the key is the LAST field and a positional index that used to be [2] is now [6]. Asserting
+  // the whole layout rather than assuming it is what makes a future format change fail here.
   const parts = h.split('$');
-  check('the stored format carries its cost parameters', parts.slice(0, 4), ['scrypt', '16384', '8', '1']);
+  check('the stored format is scrypt$N$r$p$pepperId$salt$derived', parts.length, 7);
+  check('it carries its cost parameters', parts.slice(1, 4), ['16384', '8', '1']);
   check('the derived key is the last field', Buffer.from(parts.at(-1), 'hex').length, 64);
   check('the salt is 16 bytes', Buffer.from(parts.at(-2), 'hex').length, 16);
-  // A hash written in the three-part form from before the cost was recorded must still verify —
-  // otherwise the change to the format is a data migration wearing a refactor's clothes.
-  const legacy = `scrypt$${parts.at(-2)}$${parts.at(-1)}`;
-  check('a pre-format-change hash still verifies', await verifyPassword('demo1234', legacy), true);
-  check('and it is flagged for rehash', needsRehash(legacy), true);
-  check('a current hash is not flagged', needsRehash(h), false);
-  // The cost fields go straight into a memory allocation, so a hostile row cannot ask for a
-  // degenerate cost that is cheaper than the comparison it is supposed to make expensive.
-  check('a stored N of 1 is refused', await verifyPassword('x', `scrypt$1$8$1$aa$${'00'.repeat(64)}`), false);
-  check('a non-numeric cost is refused', await verifyPassword('x', `scrypt$abc$8$1$aa$${'00'.repeat(64)}`), false);
+  check('it records which pepper it was written with', typeof parts[4] === 'string' && parts[4].length > 0, true);
+  check('a current cost-and-pepper hash is not flagged for rehash', needsRehash(h), false);
+
+  // The pepperless shape, produced by a real pepperless child process rather than by rearranging a
+  // peppered hash's fields: scrypt(password) and scrypt(HMAC(pepper, password)) derive different
+  // bytes from the same salt, so a "legacy" hash built by string surgery verifies against nothing.
+  const bare = JSON.parse(execFileSync(process.execPath, ['-e', `
+    const { hashPassword } = await import(${JSON.stringify(new URL('../server/auth.js', import.meta.url).href)});
+    process.stdout.write(JSON.stringify(await hashPassword('demo1234')));
+  `], { encoding: 'utf8', env: { ...process.env, PASSWORD_PEPPER: '', PASSWORD_PEPPER_ID: '' }, stdio: ['ignore', 'pipe', 'inherit'] }));
+  check('a pepperless process writes the 6-part form', bare.split('$').length, 6);
+  check('and that hash still verifies', await verifyPassword('demo1234', bare), true);
+  check('and is flagged, because it has no pepper', needsRehash(bare), true);
+  check('a 3-part shape is still recognised', needsRehash(`scrypt$${parts.at(-2)}$${parts.at(-1)}`), true);
+
+  // The pepper is the property, so it gets its own assertions rather than riding along on the
+  // format check. A hash must not verify under a pepper id that is not configured: falling back to
+  // the current pepper would reject a legitimately rotated hash, and falling back to none would
+  // verify an unpeppered hash against a peppered one.
+  check('a hash naming an unknown pepper id is refused',
+    await verifyPassword('demo1234', `scrypt$16384$8$1$nosuchpepper$${parts.at(-2)}$${parts.at(-1)}`), false);
+
+  // Cost fields go straight into a memory allocation, so a hostile row cannot ask for a degenerate
+  // cost cheaper than the comparison it is supposed to make expensive.
+  check('a stored N of 1 is refused', await verifyPassword('x', `scrypt$1$8$1$p$aa$${'00'.repeat(64)}`), false);
+  check('a non-numeric cost is refused', await verifyPassword('x', `scrypt$abc$8$1$p$aa$${'00'.repeat(64)}`), false);
   const N = /maxmem/.test(readFileSync(new URL('../server/auth.js', import.meta.url), 'utf8'));
   check('explicit cost parameters are set (not defaults-by-accident)', N, true);
 
@@ -771,6 +797,57 @@ section('latency budget, measured over real HTTP');
   const worst = Math.max(...scaled);
   console.log(`         device list (${devices} devices, ${worst}ms worst of 8) — must not scale with row count`);
   check('the device list stays inside its budget', worst < BUDGET.read, true);
+}
+
+// ===========================================================================
+section('the pepper: a stolen database is not a cracked database');
+// The one place in this application where "cheaper AND stronger" turned out to be true rather than
+// a tradeoff, so it gets its own section rather than a footnote under password hashing.
+//
+// A KDF's cost buys exactly one thing: making an offline attack on a stolen `password_hash` column
+// slow. It does nothing about an attacker holding the column and nothing else, and it is paid for
+// linearly by the defender on every sign-in. A pepper changes which threat is being paid for: without
+// the server secret, every row is unverifiable whatever N it was written with, including N=1. The
+// attacker's problem stops being "wait 32ms per guess" and becomes "compromise the server".
+//
+// These assertions are the reason to believe that, rather than a comment claiming it.
+{
+  const { createHmac, scryptSync, timingSafeEqual, randomBytes } = await import('node:crypto');
+  const salt = randomBytes(16).toString('hex');
+  const opts = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+  const absorb = (pw, pepper) => (pepper ? createHmac('sha256', pepper).update(pw, 'utf8').digest() : Buffer.from(pw, 'utf8'));
+
+  const real = process.env.PASSWORD_PEPPER;
+  const stolen = scryptSync(absorb('demo1234', real), salt, 64, opts);
+  const attackerGuess = scryptSync(absorb('demo1234', 'a-guess'), salt, 64, opts);
+  check('the stored column is a real scrypt derivation', stolen.length, 64);
+  check("an attacker's guess with the wrong pepper does not match it", timingSafeEqual(stolen, attackerGuess), false);
+  check('and neither does the right password without the pepper',
+    timingSafeEqual(scryptSync(absorb('demo1234', ''), salt, 64, opts), stolen), false);
+
+  // The cost of the pepper, measured rather than asserted: one HMAC-SHA256 in front of a 32ms
+  // memory-hard KDF is below the noise floor, which is the entire argument for doing it anyway.
+  const bench = (fn, n = 12) => { fn(); const t = process.hrtime.bigint(); for (let i = 0; i < n; i++) fn(); return Number(process.hrtime.bigint() - t) / 1e6 / n; };
+  const bare = bench(() => scryptSync(absorb('demo1234', ''), salt, 64, opts));
+  const peppered = bench(() => scryptSync(absorb('demo1234', real), salt, 64, opts));
+  const overhead = ((peppered / bare) - 1) * 100;
+  console.log(`         scrypt ${bare.toFixed(1)}ms bare, ${peppered.toFixed(1)}ms peppered — ${overhead >= 0 ? '+' : ''}${overhead.toFixed(1)}% overhead`);
+  check('the pepper costs under 5% of the derivation', overhead < 5, true);
+
+  // It has to be required, or it is a control that is off by default and nobody notices.
+  const src = read('server/index.js');
+  check('production refuses to boot without it', /requireSecret\('PASSWORD_PEPPER'/.test(src), true);
+  check('it is not among the published dev defaults', /PASSWORD_PEPPER: '\w/.test(read('server/auth.js')), false);
+
+  // The pepper id has to be derived from the pepper. The first version read it from the environment
+  // with a default of '1', so changing the pepper without changing the id locked out every account
+  // and it looked exactly like everyone forgetting their password.
+  const authSrc = read('server/auth.js');
+  check('the pepper id is derived from the pepper value, not configured beside it',
+    /PASSWORD_PEPPER_ID \?\? pepperId\(PEPPER\)/.test(authSrc), true);
+  check('an unknown pepper id is refused rather than guessed at', /noteUnknownPepper/.test(authSrc), true);
+  check('and the refusal is diagnosable in the log', /not configured/.test(authSrc), true);
+  check('a previous pepper can be supplied for rotation', /PASSWORD_PEPPER_PREVIOUS/.test(authSrc), true);
 }
 
 // ===========================================================================

@@ -14,10 +14,10 @@ const BASE = `http://localhost:${PORT}/v1`;
 const DB = 'check-api.db';
 
 for (const s of ['', '-wal', '-shm']) if (existsSync(DB + s)) rmSync(DB + s);
-execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB }, stdio: 'ignore' });
+execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB, PASSWORD_PEPPER: 'test-pepper' }, stdio: 'ignore' });
 
 const server = spawn(process.execPath, ['server/index.js'], {
-  env: { ...process.env, DATABASE_FILE: DB, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: 'test-secret', APP_HASH_KEY: 'test-secret' },
+  env: { ...process.env, DATABASE_FILE: DB, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: 'test-secret', APP_HASH_KEY: 'test-secret' , PASSWORD_PEPPER: 'test-pepper'},
   stdio: ['ignore', 'ignore', 'inherit'],
 });
 

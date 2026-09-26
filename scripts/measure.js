@@ -52,7 +52,7 @@ const DB_FILE = 'measure.db';
 for (const suffix of ['', '-wal', '-shm']) if (existsSync(DB_FILE + suffix)) rmSync(DB_FILE + suffix);
 
 const { execFileSync } = await import('node:child_process');
-execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB_FILE }, stdio: 'ignore' });
+execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB_FILE, PASSWORD_PEPPER: 'test-pepper' }, stdio: 'ignore' });
 
 const { openDatabase } = await import('../server/db.js');
 const { createRouter } = await import('../server/router.js');
@@ -166,7 +166,7 @@ console.log('\n\x1b[1mLATENCY OVER REAL HTTP\x1b[0m   (production server, fresh 
 const { spawn } = await import('node:child_process');
 const PORT = 8177;
 const server = spawn(process.execPath, ['server/index.js'], {
-  env: { ...process.env, DATABASE_FILE: DB_FILE, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: SECRET, APP_HASH_KEY: SECRET },
+  env: { ...process.env, DATABASE_FILE: DB_FILE, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: SECRET, APP_HASH_KEY: SECRET, PASSWORD_PEPPER: 'test-pepper'},
   stdio: ['ignore', 'ignore', 'inherit'],
 });
 await new Promise((r) => setTimeout(r, 900));

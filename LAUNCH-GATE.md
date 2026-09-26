@@ -10,8 +10,8 @@ command, and the two that matter most — `npm run audit` and `npm run pentest` 
 fail when the property stops holding.
 
 ```sh
-npm run check     # 529 assertions, 7 suites — the specification is implemented
-npm run audit     # 108 checks, 17 vulnerability classes — what an attacker gets
+npm run check     # 551 assertions, 7 suites — the specification is implemented
+npm run audit     # 139 checks, 17 vulnerability classes — what an attacker gets
 npm run pentest   # 15 checks, two phases — the signing path specifically
 npm test          # 38 browser tests — the rendered console
 ```
@@ -37,7 +37,7 @@ npm test          # 38 browser tests — the rendered console
 | 13 | Unverified Stripe webhooks | High | **n/a** | No payment route and no payment SDK. The audit asserts both, so adding billing later makes this line fail rather than silently stay "n/a". |
 | 14 | Insecure file uploads | Med | **n/a** | No upload handling and no filesystem write in any request handler. The only persistent write is SQLite. |
 | 15 | Verbose errors / exposed debug surface | Low | **clean** | One envelope — `{ code, message, reason, requestId }` — identical across 400/401/403/404. An internal error collapses to `internal error` with the stack going only to the server log; asserted directly against the sanitiser with a fake error carrying `password=hunter2`. No debug, docs, metrics or health route. An `/v1` miss is JSON, never HTML. |
-| 16 | Weak password hashing | Med | **fixed in Phase 11, tuned in 11a** | scrypt with a per-hash 16-byte salt, 64-byte derived key, constant-time compare, and a malformed or hostile stored value refused rather than thrown on. Off the event loop. The cost now travels **inside** the hash (`scrypt$N$r$p$salt$derived`), so it can be changed without a data migration, and rehash-on-login migrates a live database one sign-in at a time. Default `N=16384` deliberately unchanged — see the note under §5. |
+| 16 | Weak password hashing | Med | **fixed in Phase 11, tuned in 11a, peppered in 11b** | scrypt with a per-hash 16-byte salt, 64-byte derived key, constant-time compare, and a malformed or hostile stored value refused rather than thrown on. Off the event loop. The cost now travels **inside** the hash (`scrypt$N$r$p$salt$derived`), so it can be changed without a data migration, and rehash-on-login migrates a live database one sign-in at a time. Default `N=16384` deliberately unchanged. **Plus a pepper**, required in production: `HMAC(pepper, password)` before the KDF means a stolen `password_hash` column cannot be attacked at all without the server secret, at any `N`. Measured cost of that: **−0.4%**. See §5. |
 | 17 | Hallucinated packages (slopsquatting) | High | **clean** | 6 declared packages, each verified to resolve to a registry entry whose own `name` matches — the slopsquat signature is a real package under a lookalike name, so name identity is the test. Lockfile committed with integrity hashes on all 157 packages. `npm audit`: none. |
 
 ### Two bugs found inside my own fix for #8
@@ -103,7 +103,7 @@ said something other than what it was written to say.
 | 17 | Rate limits and abuse controls | met | See #10 above. |
 | 18 | Critical-flow tests | met | 529 node assertions + 38 browser tests. The critical flows have dedicated coverage: sign-in, refresh rotation and reuse, org switch, role change, suspend/reinstate, removal, invite lifecycle, transfer, grant create/revoke, session start/stop/terminate, and token-staleness recovery. |
 | 19 | Automated security scans | met | `npm run audit` (108 checks, 17 classes), `npm run pentest` (15 checks), `npm audit` (dependency advisories), plus the static sweeps inside the audit: no SQL interpolation, no HTML sink, no CORS literal, no key-shaped literal, no source map, no undeclared audit action. |
-| 20 | Human code review | met | Nine phases of self-review, each finding recorded in `BUILD-LOG.md` with the reproduction, and each fix verified by reverting it and watching the test go red. |
+| 20 | Human code review | met | Nine phases of self-review, each finding recorded in `BUILD-LOG.md` with the reproduction, and each fix verified by reverting it and watching the test go red. Two of my own fixes were verified that way after shipping green.|
 
 **Operation**
 
@@ -168,10 +168,38 @@ three was a test that passed while the thing it tested was broken.
 The rule that came out of all three, and the one this gate is built on: **a check is not finished
 when it passes. It is finished when it has been seen to fail for the right reason.**
 
-## 5 · The one knob that trades latency against security
+## 5 · Cheaper and stronger, and the one place that is not a tradeoff
 
-`SCRYPT_N` controls the cost of deriving a password hash, and it is the only setting in this
-repository where "make it faster" and "make it weaker" are literally the same request:
+### The part that is a genuine both
+
+`SCRYPT_N` is a straight line — 2.75x cheaper to attack offline is 2.75x faster to run, so "make login
+fast" and "make passwords weaker" are one request. But that framing is wrong about what the cost is
+*for*. A KDF cost buys exactly one thing: making an offline attack on a stolen `password_hash` column
+slow. It does nothing about an attacker who has the column and nothing else, and it is paid linearly by
+the defender on every sign-in. The money was going to the wrong threat.
+
+A **pepper** moves the threat. `HMAC(pepper, password)` before the KDF means a stolen database is not a
+cracked database: without the server secret every row is unverifiable, at any `N` including `N=1`. The
+attacker's problem stops being "wait 32ms per guess" and becomes "compromise the application server".
+
+| | measured |
+|---|---|
+| scrypt(password) | 32.0 ms |
+| scrypt(HMAC(pepper, password)) | 31.9 ms |
+| login p50, end to end | 35 ms → **34 ms** |
+| 64 concurrent sign-ins | 414 ms → **403 ms** |
+
+One SHA-256 in front of a 32 ms memory-hard KDF, below the noise floor. Stronger in kind rather than in
+degree, at no measurable cost. `PASSWORD_PEPPER` is required in production; its id is stored in the hash
+so rotation is a config change, and **derived from the pepper value** so the two cannot disagree.
+
+The cost is real and is stated rather than hidden: **losing the pepper invalidates every stored
+password**, because nothing is left to re-derive from. It belongs beside `JWT_SECRET` in the same
+secret store and the same backup.
+
+### The part that is still a tradeoff
+
+`SCRYPT_N` remains a straight line, and the default remains at 16384.
 
 | `SCRYPT_N` | memory | single sign-in | 64 concurrent | offline cost to attack |
 |---|---|---|---|---|
@@ -180,21 +208,31 @@ repository where "make it faster" and "make it weaker" are literally the same re
 | 4096 | 4 MB | 10 ms | 102 ms | 5.9× cheaper |
 | 2048 | 2 MB | 6 ms | 57 ms | 11.7× cheaper |
 
-**The default is not moved.** These parameters decide what a stolen `password_hash` column costs to
-crack offline, which is a risk decision rather than a latency one, and an application should not make
-it silently because a login screen was slow. Setting `SCRYPT_N` is a deliberate act by whoever
-deploys it.
-
-The thing that makes it safe to set at all: the cost is stored **inside** each hash, so changing it
-never invalidates an existing password, and `POST /auth/login` re-derives a stale hash at the
-current cost on the next successful sign-in. A deployment migrates its own password column
-incrementally, in whichever direction, with no downtime and no locked-out accounts.
-
-A latency budget now guards the result — 200ms p95 for login, 50ms p95 for the read endpoints,
-measured over real HTTP in `npm run audit`, with a **floor** as well as a ceiling on login so that a
-speed-up achieved by removing the hash fails the gate.
+**The default is not moved.** These parameters decide what a stolen column costs to crack offline, and
+that is a risk decision rather than a latency one. Setting `SCRYPT_N` is a deliberate act by whoever
+deploys it. The cost is stored inside each hash, so changing it never invalidates an existing password,
+and `POST /auth/login` re-derives a stale hash at the current cost on the next successful sign-in.
 
 `UV_THREADPOOL_SIZE=8` (set in `npm start` and `npm run dev`) is the free half: 690ms → 532ms for a
-64-way burst with the KDF cost untouched. It cannot be set from inside the process, because libuv
-reads it once at threadpool creation — an in-process assignment measured 654ms against a 616ms
-default, looking like it worked and doing nothing.
+64-way burst with the KDF cost untouched. It cannot be set from inside the process, because libuv reads
+it once at threadpool creation — an in-process assignment measured 654ms against a 616ms default,
+looking like it worked and doing nothing.
+
+### Argon2id: measured, and deliberately not adopted
+
+Argon2id at 16 MB / t=2 — roughly the OWASP first recommendation — benchmarks at **22.6 ms against
+scrypt's 32.1 ms**, so 30% faster *and* better time-memory-tradeoff and side-channel resistance, because
+it separates memory from iteration count where scrypt ties them as `128 * N * r`. Real numbers, from
+`hash-wasm` installed in a throwaway directory outside this repository.
+
+Not adopted: a new dependency on the authentication path is the worst place to add supply-chain risk,
+`hash-wasm` is WASM so those timings are 2-3x worse than a native build, and the native package needs
+node-gyp — which a reviewer without a compiler experiences as a broken checkout. On Node 24+, where
+`node:crypto` may carry Argon2 natively, that objection disappears and the migration is a one-function
+change: the stored format already carries its parameters, so an algorithm field slots in beside them.
+
+### A latency budget, so it stays fast
+
+`npm run audit` measures p50/p95 over real HTTP — 200 ms for login, 50 ms for reads, with a **floor** as
+well as a ceiling on login, so a speed-up achieved by removing the hash fails the gate rather than
+passing it. Verified by injecting a 300 ms sleep: the gate fails and the audit exits 1.

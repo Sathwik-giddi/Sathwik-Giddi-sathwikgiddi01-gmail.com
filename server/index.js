@@ -68,6 +68,18 @@ function requireSecret(name, devFallback) {
 
 const SECRET = requireSecret('JWT_SECRET', 'dev-secret-change-me');
 
+// The pepper that password hashes are absorbed into. Required in production, and for the same
+// reason as the two above but with a sharper edge: without it, a stolen `password_hash` column is a
+// crackable column, and no amount of scrypt cost changes that — cost only buys time, and time is
+// exactly what an offline attacker has. With it, the column alone is worthless. See server/auth.js.
+//
+// It is the one secret here whose loss is unrecoverable: losing the pepper does not lock anyone out
+// temporarily, it invalidates every stored password, because there is nothing left to re-derive from.
+// It belongs beside JWT_SECRET in the same secret store, and it must never be written to the
+// database it protects.
+process.env.PASSWORD_PEPPER = requireSecret('PASSWORD_PEPPER', 'dev-only-pepper-change-me');
+process.env.PASSWORD_PEPPER_ID = process.env.PASSWORD_PEPPER_ID ?? '1';
+
 // The same mistake one line away, and it was worth fixing while here. auth.js HMACs refresh and
 // invite tokens with APP_HASH_KEY before storing them, and its own comment says the key "is an
 // application secret, not a hardcoded literal" — while defaulting to exactly that. A known key

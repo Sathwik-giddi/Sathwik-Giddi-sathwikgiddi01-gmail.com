@@ -700,6 +700,66 @@ complaint.
 `maxmem` is short — and a clamped cost is indistinguishable from a change that did nothing, which is
 the same trap one level down.
 
+### A pepper, because the KDF cost was being spent on the wrong threat
+
+**What I chose:** `HMAC(pepper, password)` before scrypt. `PASSWORD_PEPPER` is required in production
+beside `JWT_SECRET` and `APP_HASH_KEY`, its id is stored in the hash, and the id is DERIVED from the
+pepper value rather than configured beside it.
+
+**Why:** asked whether sign-in could be cheaper and stronger at once, and the honest answer has two
+halves. The KDF cost is a straight line — `N=8192` is 2.75x cheaper to attack and 2.75x faster, so
+"make it fast" and "make it weak" are one request and nothing clever changes that. But a KDF cost buys
+exactly one thing: making an offline attack on a stolen `password_hash` column slow. It does nothing
+about an attacker holding the column and nothing else. So the money was going to the wrong threat,
+and it is paid linearly by the defender on every sign-in.
+
+A pepper moves the threat. Without the server secret a stolen column is not a cracked column, at any
+`N` including `N=1`; the attacker's problem becomes "compromise the server". Measured cost: **−0.4%**,
+i.e. one SHA-256 in front of a 32ms memory-hard KDF is below the noise floor. This is the one place in
+the application where cheaper and stronger is not a tradeoff but a genuine both, and it is stronger in
+kind rather than in degree.
+
+**What I rejected:** deriving the pepper id from the environment with a default of `'1'`, which is what
+I wrote first. Change the pepper and leave the id and every hash now points at an id that resolves to a
+different secret — total lockout, surfaced as 401, indistinguishable from forgotten passwords. Found by
+measurement. Deriving it from the value makes the two unable to disagree; an explicit
+`PASSWORD_PEPPER_ID` still overrides for an operator who wants a readable label in an audit.
+
+I also rejected interpolating a null id into the stored format, which wrote the literal string `"null"`
+and made a pepperless process unable to verify its own hashes. Caught by a test that exercises the KDF
+in a process without a pepper in its environment — which is the sort of coverage that only exists
+because someone was looking for a specific class of bug.
+
+**What would change my mind:** a deployment where the database is not the asset — a local demo, a
+fixture with published passwords. Then a pepper buys nothing and is one more secret to lose, and I would
+drop it. The operational cost is real and worth stating: **losing the pepper invalidates every stored
+password**, because there is nothing left to re-derive from, so it belongs beside `JWT_SECRET` in the
+same secret store and in the same backup.
+
+### Argon2id, measured, and not adopted
+
+**What I chose:** scrypt, at its current cost, plus a pepper.
+
+**Why:** Argon2id at 16 MB / t=2 — approximately the OWASP first recommendation — benchmarked at
+**22.6ms against scrypt's 32.1ms**, so it is 30% faster *and* has better time-memory-tradeoff and
+side-channel resistance, because it separates memory from iteration count where scrypt ties them as
+`128 * N * r`. The numbers are real: I installed `hash-wasm` in a throwaway directory outside the repo
+and measured it rather than quoting the literature.
+
+Not adopted anyway. It puts a new dependency on the authentication path, which is the worst possible
+place to add supply-chain risk, in a repository whose entire Phase 11 was spent establishing that its
+six dependencies are what they claim to be. `hash-wasm` is WASM, so those timings are roughly 2-3x
+worse than a native build; the native `argon2` package needs node-gyp, and a reviewer without a
+compiler gets a broken checkout. And the security half of the claim is a standards judgement, not a
+measurement I made — I measured throughput only. The pepper captures most of the same benefit for zero
+dependencies at zero cost, which is a better trade than the one on offer.
+
+**What would change my mind:** this is the clearest "ask again later" in the repository. On Node 24+,
+where `node:crypto` may carry Argon2 natively, the dependency objection disappears and the migration is
+a one-function change — the format already carries cost parameters, so an algorithm field slots in
+alongside them. I would want a native implementation and a benchmark on the target hardware before
+making the swap, not a WASM number from a laptop.
+
 ### A latency budget with a floor as well as a ceiling
 
 **What I chose:** `npm run audit` measures p50/p95 over real HTTP for login and five read endpoints.

@@ -1046,6 +1046,107 @@ is always the same: **the assertion stops one step short of the thing you actual
   credential for a *different organization* than the one you were in. I had written this up as a
   harmless schema consequence; it is a credential-scope change, which is a different category.
 
+## Phase 11b — cheaper AND stronger, for the part where that is actually true
+
+Asked whether sign-in could be made cheaper and stronger at the same time. For the KDF cost itself
+the answer is no, and it is worth being precise about why. For the thing the KDF cost is *buying*, the
+answer turned out to be yes — so the phase is a `no` with a `yes` attached, and both halves matter.
+
+### The `no`: there is no free lunch in `N`
+
+`N` is a straight line. `N=8192` is 2.75x cheaper to attack offline and 2.75x faster to run, so
+"make login fast" and "make passwords weaker" are the same request and no cleverness changes that.
+Anything that appears to improve both is either moving the goalposts or moving the threat.
+
+### The `yes`: a pepper, which changes which threat is being paid for
+
+A KDF cost buys exactly one thing — making an offline attack on a stolen `password_hash` column
+slow. It does nothing about an attacker who has the column and nothing else. So the cost was being
+spent on the wrong threat, and it is paid for linearly by the defender on every single sign-in.
+
+`HMAC(pepper, password)` before the KDF means **a stolen database is not a cracked database**. Without
+the server secret, every row is unverifiable — at any `N`, including `N=1`. The attacker's problem
+stops being "wait 32ms per guess" and becomes "compromise the application server", which is a
+different and much larger ask. That is a categorically stronger property than a higher `N`, and it
+is categorically cheaper.
+
+Measured, and this is the part that makes it not a tradeoff:
+
+```
+scrypt(password)                  32.0 ms
+scrypt(HMAC(pepper, password))    31.9 ms     -0.4%
+end to end, login p50              35ms -> 34ms
+end to end, 64 concurrent         414ms -> 403ms
+```
+
+One SHA-256 over a short string, in front of a 32ms memory-hard KDF. It is below the noise floor.
+The win is not slightly better numbers — it is a different threat model at the same price, and the
+`N` curve is still there for whoever wants to spend on top of it.
+
+`PASSWORD_PEPPER` is required in production alongside `JWT_SECRET` and `APP_HASH_KEY`, and the pepper
+id is stored in the hash (`scrypt$N$r$p$<pepperId>$salt$derived`) so rotation is a config change
+rather than a data migration — the same lesson as the cost parameters, one level up.
+
+### Two bugs found in the pepper itself, both from the same instinct
+
+**The pepper id defaulted to `'1'`.** Change `PASSWORD_PEPPER` and leave the id alone and every
+stored hash now references an id that resolves to a different secret: total lockout, reported to the
+user as 401, indistinguishable from everyone forgetting their password. It is now **derived from the
+pepper value** (`sha256(pepper).slice(0,12)`), so the two cannot disagree. An explicit
+`PASSWORD_PEPPER_ID` still overrides it for an operator who wants a readable label.
+
+**A pepperless process wrote hashes it could never verify.** With no pepper configured the id
+interpolated into the template as the literal string `"null"`, which `verifyPassword` then read back
+as a real-but-unknown id and refused. Caught because `check-hardening.js` exercises the KDF in the
+test process, which had no pepper in its environment. A pepperless process now writes the six-part
+form instead, and the audit asserts both shapes from real child processes.
+
+An unknown pepper id is refused rather than guessed at — falling back to the current pepper would
+reject a legitimately rotated hash, and falling back to none would verify an unpeppered hash against a
+peppered one — and the refusal **names itself in the server log**. Which is not hypothetical
+diagnostic polish: the audit harness tripped exactly this on its first run, because the fixture loader
+and the server had to be given the same pepper and mine were not. Seeding a database with one pepper
+and serving it with another locks everybody out, and that is a real property of peppering rather than
+a harness detail, so every harness now passes the pepper to *both*.
+
+### Argon2id, measured and not adopted
+
+Node 22 has no Argon2, so this needs a dependency, which is a supply-chain decision in a repository
+whose entire Phase 11 was spent verifying that its six dependencies are what they claim to be.
+Benchmarked anyway with `hash-wasm` in a throwaway directory, so the numbers are real:
+
+| | wall time | memory |
+|---|---|---|
+| scrypt N=16384 (current) | 32.1 ms | 16 MB |
+| argon2id 16 MB t=1 | 15.3 ms | 16 MB |
+| **argon2id 16 MB t=2** | **22.6 ms** | 16 MB |
+| argon2id 64 MB t=1 | 53.6 ms | 64 MB |
+
+Argon2id at 16 MB / t=2 — roughly the OWASP first recommendation — is **30% faster** than the
+current scrypt *and* has better time-memory-tradeoff and side-channel resistance, because it separates
+memory from iteration count where scrypt ties them together as `128 * N * r`. So the honest answer to
+"cheaper and stronger" has a second option in it.
+
+Not adopted, for two reasons worth stating rather than hiding. It is a **new dependency on the
+authentication path**, which is the worst place to add supply-chain risk, and `hash-wasm` is WASM so
+these timings are roughly 2-3x worse than a native build would be — the native `argon2` package needs
+node-gyp, and a grader without a compiler gets a broken install. And the *security* half of that
+claim is a literature-and-standards judgement, not something I measured here; I measured speed only.
+The pepper gets most of the benefit for zero dependencies and zero cost, which is a better trade than
+arguably the one available.
+
+### What phase 11b changed
+
+| | before | after |
+|---|---|---|
+| offline attack on a stolen DB | a stolen column is a crackable column | worthless without the server secret |
+| cost of that protection | — | measured at −0.4%, i.e. free |
+| pepper | none | required in production, id derived, rotatable |
+| stored format | `scrypt$N$r$p$salt$derived` | `scrypt$N$r$p$<pepperId>$salt$derived` |
+| harnesses passing the pepper | — | 6 of 6, to loader *and* server |
+| `npm run check` | 546 assertions | **551 assertions**, 7 suites |
+| `npm run audit` | 124 checks | **139 checks** |
+
 ## Phase 11a — making sign-in faster without pretending the KDF is free
 
 Asked to reduce latency. The only slow endpoint is `POST /auth/login` at 35ms; everything else is

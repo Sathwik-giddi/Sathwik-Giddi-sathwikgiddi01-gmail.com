@@ -24,12 +24,21 @@ const PORT = 8179;
 const BASE = `http://localhost:${PORT}/v1`;
 const DB = 'hardening.db';
 const SECRET = 'hardening-secret';
+// The pepper is part of the HASH, not just of verification, so the fixture loader and the
+// server must be given the SAME one. Seed with one pepper and serve with another and nobody can
+// sign in -- which is a real operational property of peppering, not a harness detail.
+const PEPPER = 'test-pepper';
+// The assertions below call hashPassword/verifyPassword in THIS process, not over HTTP, so the
+// pepper has to be in this process's environment as well as the spawned server's. A mismatch here
+// is not hypothetical: seeding a database with one pepper and serving it with another locks
+// everybody out, and it is the shape of mistake the server's own log message exists to name.
+process.env.PASSWORD_PEPPER = PEPPER;
 
 for (const suffix of ['', '-wal', '-shm']) if (existsSync(DB + suffix)) rmSync(DB + suffix);
-execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB }, stdio: 'ignore' });
+execFileSync(process.execPath, ['scripts/load-db.js'], { env: { ...process.env, DATABASE_FILE: DB, PASSWORD_PEPPER: PEPPER }, stdio: 'ignore' });
 
 const server = spawn(process.execPath, ['server/index.js'], {
-  env: { ...process.env, DATABASE_FILE: DB, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: SECRET, APP_HASH_KEY: SECRET, SCRYPT_N: '4096' },
+  env: { ...process.env, DATABASE_FILE: DB, PORT: String(PORT), NODE_ENV: 'production', JWT_SECRET: SECRET, APP_HASH_KEY: SECRET, PASSWORD_PEPPER: PEPPER, SCRYPT_N: '4096' },
   stdio: ['ignore', 'ignore', 'inherit'],
 });
 await new Promise((r) => setTimeout(r, 1000));
@@ -642,25 +651,46 @@ console.log('\n== the KDF cost travels inside the hash, so it can be changed saf
   const h = await hashPassword('demo1234');
   const parts = h.split('$');
 
-  check('the stored format is scrypt$N$r$p$salt$derived', parts.length, 6);
+  check('the stored format is scrypt$N$r$p$pepperId$salt$derived', parts.length, 7);
   check('N is recorded rather than implied', Number(parts[1]) >= 2, true);
+  check('the pepper id is recorded', typeof parts[4] === 'string' && parts[4].length > 0, true);
   check('the derived key is 64 bytes', Buffer.from(parts.at(-1), 'hex').length, 64);
   check('the salt is 16 bytes', Buffer.from(parts.at(-2), 'hex').length, 16);
   check('it verifies', await verifyPassword('demo1234', h), true);
   check('a wrong password does not', await verifyPassword('nope', h), false);
-  check('a current-cost hash needs no rehash', needsRehash(h), false);
+  check('a current-cost-and-pepper hash needs no rehash', needsRehash(h), false);
 
-  // The three-part form written before the cost was recorded. It must keep working, or changing
-  // the format is a data migration wearing a refactor's clothes.
-  const legacy = `scrypt$${parts.at(-2)}$${parts.at(-1)}`;
-  check('a pre-format-change hash still verifies', await verifyPassword('demo1234', legacy), true);
-  check('and it is flagged for rehash', needsRehash(legacy), true);
+  // Older shapes must keep working, or each format change is a data migration wearing a refactor's
+  // clothes. Both are unpeppered, so both are flagged: re-deriving them on the owner's next sign-in
+  // is the only moment the plaintext exists to add a pepper to a hash written without one.
+  //
+  // These are produced by a child process with NO pepper in its environment, because they cannot be
+  // forged by rearranging the fields of a peppered hash — `scrypt(password)` and
+  // `scrypt(HMAC(pepper, password))` derive different bytes from the same salt, so a "legacy" hash
+  // built by string surgery off a peppered one verifies against nothing. The first version of this
+  // block did exactly that and reported two honest hashes as broken.
+  const legacy = JSON.parse(execFileSync(process.execPath, ['-e', `
+    const { hashPassword } = await import(${JSON.stringify(new URL('../server/auth.js', import.meta.url).href)});
+    process.stdout.write(JSON.stringify({ six: await hashPassword('demo1234') }));
+  `], { encoding: 'utf8', env: { ...process.env, PASSWORD_PEPPER: '', PASSWORD_PEPPER_ID: '' }, stdio: ['ignore', 'pipe', 'inherit'] }));
+  check('a pepperless hash is written in the 6-part form', legacy.six.split('$').length, 6);
+  check('a 6-part hash from before the pepper still verifies', await verifyPassword('demo1234', legacy.six), true);
+  check('and is flagged for rehash, since it has no pepper', needsRehash(legacy.six), true);
+  const stripped = `scrypt$${parts.at(-2)}$${parts.at(-1)}`;
+  check('a 3-part one is still a recognisable shape', stripped.split('$').length, 3);
+  check('a 3-part one from before the cost is flagged for rehash', needsRehash(stripped), true);
+
+  // The pepper is the property. A hash naming an id no pepper satisfies must be refused, not
+  // guessed at: falling back to the current pepper would reject a legitimately rotated hash, and
+  // falling back to none would verify an unpeppered hash against a peppered one.
+  check('a hash naming an unknown pepper id is refused',
+    await verifyPassword('demo1234', `scrypt$16384$8$1$nosuch$${parts.at(-2)}$${parts.at(-1)}`), false);
 
   // A cost that is not ours to set. These fields go straight into a memory allocation, so a row
   // anyone can write must not be able to ask for a KDF cheaper than the comparison it precedes.
-  check('a stored N below the floor is refused', await verifyPassword('x', `scrypt$1$8$1$aa$${'00'.repeat(64)}`), false);
-  check('a non-numeric N is refused', await verifyPassword('x', `scrypt$xx$8$1$aa$${'00'.repeat(64)}`), false);
-  check('a truncated key is refused, not thrown on', await verifyPassword('x', 'scrypt$16384$8$1$aa$00'), false);
+  check('a stored N below the floor is refused', await verifyPassword('x', `scrypt$1$8$1$p$aa$${'00'.repeat(64)}`), false);
+  check('a non-numeric N is refused', await verifyPassword('x', `scrypt$xx$8$1$p$aa$${'00'.repeat(64)}`), false);
+  check('a truncated key is refused, not thrown on', await verifyPassword('x', 'scrypt$16384$8$1$p$aa$00'), false);
   check('a non-scrypt scheme is refused', await verifyPassword('x', 'md5$a$b$c'), false);
 
   // The end-to-end half: a server whose SCRYPT_N differs from the stored hashes must migrate them
