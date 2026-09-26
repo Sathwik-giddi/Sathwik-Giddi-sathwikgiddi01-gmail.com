@@ -57,15 +57,27 @@ export function App() {
   const [booting, setBooting] = useState(true);
   const [notice, setNotice] = useState(null);
 
+  // /v1/auth/me failing during boot must not strand the page on "Restoring your session…".
+  // `setBooting(false)` was only reached if `loadMe()` resolved, so one failed request left the
+  // console hanging with no shell and no reason — which is the one state BRIEF.md §3.2(5) calls
+  // indistinguishable from a broken app.
+  const [bootError, setBootError] = useState(null);
+
   // A reload has no access token — there is nothing in web storage to restore one from. The
   // httpOnly refresh cookie is sent by the browser automatically, so one POST rebuilds the session.
   useEffect(() => {
     let live = true;
     (async () => {
-      const refreshed = await api.tryRefresh();
-      if (!live) return;
-      if (refreshed) await loadMe();
-      if (live) setBooting(false);
+      try {
+        const refreshed = await api.tryRefresh();
+        if (!live) return;
+        if (refreshed) await loadMe();
+        if (live) setBootError(null);
+      } catch (err) {
+        if (live) setBootError(err.human ?? 'Could not reach the server.');
+      } finally {
+        if (live) setBooting(false);
+      }
     })();
     return () => { live = false; };
   }, []);
@@ -112,7 +124,7 @@ export function App() {
     return <div className="gate"><div className="gate__card"><h1 className="gate__title">RemoteOps</h1><p className="gate__sub">Restoring your session…</p></div></div>;
   }
 
-  if (!me) return <Login onSignedIn={signIn} notice={notice} />;
+  if (!me) return <Login onSignedIn={signIn} notice={bootError ? `Could not sign you in: ${bootError}` : notice} />;
 
   return <Shell me={me} onReload={loadMe} onSignOut={signOut} />;
 }
@@ -132,6 +144,19 @@ function Shell({ me, onReload, onSignOut }) {
   const [auditPage, setAuditPage] = useState(0);
   const [error, setError] = useState(null);
   const [switching, setSwitching] = useState(false);
+
+  // Reference data — the permission catalogue and the role list — fetched ONCE for the whole
+  // console and threaded down. It used to be fetched independently by each RolePicker (one per
+  // member row) and again by the grants card, so the request count grew with the number of members
+  // and each response carried the full catalogue. See the note on RolePicker.
+  const [reference, setReference] = useState(null);
+  React.useEffect(() => {
+    let live = true;
+    api.reference()
+      .then((r) => { if (live) setReference(r); })
+      .catch((err) => { if (live) setError(err); });
+    return () => { live = false; };
+  }, []);
 
   // The org-level resolved set. Memoised so it is referentially stable between renders: it is read
   // on every render to decide which cards exist, and a fresh object each time would be a new
@@ -315,19 +340,31 @@ function Shell({ me, onReload, onSignOut }) {
 
         <div className="content">
           {current?.key === 'devices' && (
-            <DevicesCard orgId={orgId} orgPermissions={permissions} devices={data.devices ?? []} onReload={reload} onError={setError} />
+            <DevicesCard
+              orgId={orgId}
+              orgPermissions={permissions}
+              devices={data.devices ?? []}
+              orgs={me.orgs}
+              onReload={reload}
+              onError={setError}
+            />
           )}
           {current?.key === 'people' && (
-            <PeopleCard orgId={orgId} orgPermissions={permissions} members={data.members ?? []} onReload={reload} onError={setError} meId={me.user.id} />
+            <PeopleCard orgId={orgId} orgPermissions={permissions} members={data.members ?? []} onReload={reload} onError={setError} meId={me.user.id} reference={reference} />
           )}
           {current?.key === 'grants' && (
-            <GrantsCard orgId={orgId} orgPermissions={permissions} grants={data.grants ?? []} members={data.members ?? []} devices={data.devices ?? []} onReload={reload} onError={setError} />
+            <GrantsCard orgId={orgId} orgPermissions={permissions} grants={data.grants ?? []} members={data.members ?? []} devices={data.devices ?? []} onReload={reload} onError={setError} reference={reference} />
           )}
           {current?.key === 'sessions' && (
             <SessionsCard orgId={orgId} orgPermissions={permissions} sessions={data.sessions ?? []} devices={data.devices ?? []} onReload={reload} onError={setError} />
           )}
           {current?.key === 'audit' && (
-            <AuditCard events={data.audit ?? []} total={data.auditTotal ?? 0} />
+            <AuditCard
+              events={data.audit ?? []}
+              total={data.auditTotal ?? 0}
+              page={auditPage}
+              onPage={setAuditPage}
+            />
           )}
           {current?.key === 'admin' && (
             <AdminCard orgId={orgId} orgPermissions={permissions} org={me.org} onReload={reload} onError={setError} />

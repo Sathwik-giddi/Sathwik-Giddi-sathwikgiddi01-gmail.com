@@ -17,7 +17,7 @@ const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { dateSt
 // ===========================================================================
 // Devices
 // ===========================================================================
-export function DevicesCard({ orgId, orgPermissions, devices, onReload, onError }) {
+export function DevicesCard({ orgId, orgPermissions, devices, orgs = [], onReload, onError }) {
   const [busy, setBusy] = useState(null);
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState('');
@@ -85,7 +85,7 @@ export function DevicesCard({ orgId, orgPermissions, devices, onReload, onError 
           </thead>
           <tbody>
             {devices.map((d) => (
-              <DeviceRow key={d.id} orgId={orgId} device={d} busy={busy} run={run} onError={onError} />
+              <DeviceRow key={d.id} orgId={orgId} device={d} orgs={orgs} busy={busy} run={run} onError={onError} />
             ))}
           </tbody>
         </table>
@@ -94,7 +94,7 @@ export function DevicesCard({ orgId, orgPermissions, devices, onReload, onError 
   );
 }
 
-function DeviceRow({ orgId, device, busy, run, onError }) {
+function DeviceRow({ orgId, device, orgs, busy, run, onError }) {
   const p = device.permissions;
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(device.name);
@@ -139,19 +139,19 @@ function DeviceRow({ orgId, device, busy, run, onError }) {
         ) : (
           <>
             <PermButton permissions={p} permission="device:view" data-testid="start-view" title={`View ${device.name} · ${provenance(verdict(p, 'device:view'))}`}
-              onClick={() => run(`view-${device.id}`, () => api.startSession(orgId, device.id, 'view').catch(rejectBusy(orgId, onError)))}>
+              onClick={() => run(`view-${device.id}`, () => api.startSession(orgId, device.id, 'view').catch(surfaceError(onError)))}>
               View
             </PermButton>
             <PermButton permissions={p} permission="device:control" data-testid="start-control" title={`Control ${device.name} · ${provenance(verdict(p, 'device:control'))}`}
-              onClick={() => run(`control-${device.id}`, () => api.startSession(orgId, device.id, 'control').catch(rejectBusy(orgId, onError)))}>
+              onClick={() => run(`control-${device.id}`, () => api.startSession(orgId, device.id, 'control').catch(surfaceError(onError)))}>
               Control
             </PermButton>
             <PermButton permissions={p} permission="device:terminal" data-testid="start-terminal" title={`Terminal ${device.name} · ${provenance(verdict(p, 'device:terminal'))}`}
-              onClick={() => run(`terminal-${device.id}`, () => api.startSession(orgId, device.id, 'terminal').catch(rejectBusy(orgId, onError)))}>
+              onClick={() => run(`terminal-${device.id}`, () => api.startSession(orgId, device.id, 'terminal').catch(surfaceError(onError)))}>
               Terminal
             </PermButton>
             <PermButton permissions={p} permission="device:file_transfer" data-testid="transfer-files" title={`Transfer files · ${provenance(verdict(p, 'device:file_transfer'))}`}
-              onClick={() => run(`xfer-${device.id}`, () => startTransfer(orgId, device))}>
+              onClick={() => run(`xfer-${device.id}`, () => startTransfer(orgId, device, orgs))}>
               Transfer files
             </PermButton>
             <PermButton permissions={p} permission="device:update" data-testid="rename-device" title={`Rename · ${provenance(verdict(p, 'device:update'))}`}
@@ -173,25 +173,39 @@ function DeviceRow({ orgId, device, busy, run, onError }) {
   );
 }
 
-// A transfer needs a destination org, so it asks. Returns a promise so the row's `run` wrapper can
-// show busy state, and resolves without doing anything if the person cancels.
-function startTransfer(orgId, device) {
-  const destination = window.prompt(`Move ${device.name} to which organization id?`, '');
-  if (!destination) return Promise.resolve();
-  return api.transferDevice(orgId, device.id, destination.trim());
+/**
+ * A transfer needs a destination. It used to `window.prompt` for an ORGANIZATION ID, which is
+ * unusable without already knowing an id out of band — and it is also the one place a user could
+ * accidentally walk into the org-existence probe. So the destination is chosen from a list the user
+ * can actually see, fetched from an endpoint that is already scoped to their own orgs.
+ */
+function startTransfer(orgId, device, orgs) {
+  const choices = orgs.filter((o) => o.id !== orgId);
+  if (choices.length === 0) {
+    window.alert(`${device.name} cannot be moved: you are not a member of any other organization.`);
+    return Promise.resolve();
+  }
+  const lines = choices.map((o, i) => `  ${i + 1}. ${o.name}`).join('\n');
+  const answer = window.prompt(`Move ${device.name} to which organization?\n${lines}\n\nEnter a number:`, '1');
+  if (answer === null) return Promise.resolve();
+  const chosen = choices[Number(answer.trim()) - 1];
+  if (!chosen) {
+    window.alert('That is not one of the organizations you belong to.');
+    return Promise.resolve();
+  }
+  return api.transferDevice(orgId, device.id, chosen.id);
 }
 
-// A session needs both permissions; when the server refuses with `missing_device_permission` the
-// button was rendered from a set that has since changed, so reload rather than guess.
-const rejectBusy = (orgId, onError) => async (err) => {
-  onError(err);
-  try { await api.listDevices(orgId); } catch { /* the error above is the one worth showing */ }
-};
+// A session needs both permissions. When the server refuses, the button was rendered from a set
+// that has since changed, so the row's provenance may be stale — but `run()` already reloads after
+// every action, so this only has to SURFACE the error. It used to fetch the device list and throw
+// the result away, which was a wasted request and fired onError from two places for one failure.
+const surfaceError = (onError) => (err) => { onError(err); };
 
 // ===========================================================================
 // People
 // ===========================================================================
-export function PeopleCard({ orgId, orgPermissions, members, onReload, onError, meId }) {
+export function PeopleCard({ orgId, orgPermissions, members, onReload, onError, meId, reference }) {
   const [inviting, setInviting] = useState(false);
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('viewer');
@@ -221,7 +235,7 @@ export function PeopleCard({ orgId, orgPermissions, members, onReload, onError, 
           <input placeholder="email" value={email} onChange={(e) => setEmail(e.target.value)} aria-label="invite email" />
           {/* Already inside an IfAllowed for `user:invite`; passing `permissions` lets this one
               annotate its own <select> too, rather than relying on a clone that cannot reach it. */}
-          <RolePicker permissions={orgPermissions} permission="user:invite" value={role} onChange={setRole} label="invite role" />
+          <RolePicker reference={reference} permissions={orgPermissions} permission="user:invite" onError={onError} value={role} onChange={setRole} label="invite role" />
           <button
             className="btn btn--primary"
             disabled={busy === 'invite' || email.trim() === ''}
@@ -275,8 +289,10 @@ export function PeopleCard({ orgId, orgPermissions, members, onReload, onError, 
                     produced a <select> with no data-permission at all. A host element is the only
                     thing cloneElement can reliably annotate. */}
                 <RolePicker
+                  reference={reference}
                   permissions={orgPermissions}
                   permission="user:role:update"
+                  onError={onError}
                   value={m.role}
                   userId={m.user_id}
                   disabled={busy === `role-${m.user_id}`}
@@ -321,15 +337,29 @@ export function PeopleCard({ orgId, orgPermissions, members, onReload, onError, 
  * the server's reference data, so a role that exists only in the graded fixture's database appears
  * here without any code change. Never a hardcoded list of five.
  */
-function RolePicker({ permissions, permission = 'user:role:update', value, onChange, disabled, label, userId }) {
-  const [roles, setRoles] = useState([]);
-  React.useEffect(() => {
-    let live = true;
-    api.reference()
-      .then((r) => { if (live) setRoles(r.roles); })
-      .catch(() => { if (live) setRoles([]); });
-    return () => { live = false; };
-  }, []);
+/**
+ * The role picker.
+ *
+ * `reference` is passed in rather than fetched here. It used to `useEffect(api.reference, [])` and
+ * this component is instantiated once PER MEMBER ROW, so a fifty-person org issued fifty requests,
+ * each returning the full 20-permission / 27-pattern catalogue. That is precisely the
+ * "one request per row" antipattern BRIEF.md §6 names, and it grew with the org. `Shell` fetches it
+ * once and threads it down.
+ *
+ * The failure path also changed: `.catch(() => setRoles([]))` rendered a select with zero options
+ * and no message, which was the only place in the console where a failure produced no explanation
+ * at all. It now surfaces the reason.
+ */
+function RolePicker({ reference, permissions, permission = 'user:role:update', value, onChange, disabled, label, userId, onError }) {
+  const roles = reference?.roles ?? [];
+
+  if (roles.length === 0) {
+    return (
+      <span className="cell-sub" data-testid="role-select-unavailable">
+        {onError ? 'roles unavailable' : 'no roles'}
+      </span>
+    );
+  }
 
   return (
     <IfAllowed permissions={permissions} permission={permission}>
@@ -351,21 +381,15 @@ function RolePicker({ permissions, permission = 'user:role:update', value, onCha
 // ===========================================================================
 // Grants
 // ===========================================================================
-export function GrantsCard({ orgId, orgPermissions, grants, members, devices, onReload, onError }) {
+export function GrantsCard({ orgId, orgPermissions, grants, members, devices, onReload, onError, reference }) {
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(null);
 
-  // The catalogue comes from the server. This is the single most important reason the console has
-  // no permission table of its own: the checkboxes below are generated from the DATABASE, so a
-  // permission that appears in no document still shows up here and can be granted.
-  const [ref, setRef] = useState({ permissions: [], patterns: [] });
-  React.useEffect(() => {
-    let live = true;
-    api.reference()
-      .then((r) => { if (live) setRef(r); })
-      .catch(() => {});
-    return () => { live = false; };
-  }, []);
+  // The catalogue comes from the server, passed down from Shell. This is the single most important
+  // reason the console has no permission table of its own: the checkboxes below are generated from
+  // the DATABASE, so a permission that appears in no document still shows up here and can be
+  // granted. Fetched here it was a FOURTH independent copy of the same request.
+  const ref = reference ?? { permissions: [], patterns: [] };
 
   const run = async (key, fn) => {
     setBusy(key);
@@ -666,8 +690,19 @@ export function SessionsCard({ orgId, orgPermissions, sessions, devices, onReloa
 // ===========================================================================
 // Audit
 // ===========================================================================
-export function AuditCard({ events, total, onError }) {
-  const [page, setPage] = useState(0);
+/**
+ * The audit log. `page` and `onPage` are lifted into `Shell` deliberately.
+ *
+ * This card used to own `const [page, setPage] = useState(0)` and render "page N of M" with
+ * Newer/Older buttons — and `App` passed it only `events` and `total`. So clicking Older changed
+ * the heading to "page 2 of 3" while the table still showed page 1's fifty rows, and **no request
+ * was made**. A shipped control that displays a falsehood is worse than not shipping it, because
+ * the user has no way to know the data did not move.
+ *
+ * The state and the fetch were already in the same place (`Shell` holds `auditPage` and calls
+ * `listAudit`), so the fix is to pass them down rather than to duplicate either.
+ */
+export function AuditCard({ events, total, page, onPage }) {
   const pageSize = 50;
   const pages = Math.max(1, Math.ceil((total ?? 0) / pageSize));
 
@@ -679,7 +714,9 @@ export function AuditCard({ events, total, onError }) {
       </header>
 
       {events.length === 0 ? (
-        <p className="empty">Nothing recorded yet.</p>
+        <p className="empty">
+          {total === 0 ? 'Nothing recorded yet.' : 'Nothing on this page.'}
+        </p>
       ) : (
         <>
           <table className="table">
@@ -705,19 +742,29 @@ export function AuditCard({ events, total, onError }) {
               ))}
             </tbody>
           </table>
+
           {pages > 1 && (
             <div className="pager">
-              <button className="btn btn--ghost" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>Newer</button>
-              <span className="cell-sub">page {page + 1} of {pages}</span>
-              <button className="btn btn--ghost" disabled={page + 1 >= pages} onClick={() => setPage((p) => p + 1)}>Older</button>
+              {/* Named prev/next, not newer/older: "Newer" moves the page index DOWN and my first
+                  test ids were inverted relative to their own labels, which is a trap for whoever
+                  writes the next test. */}
+              <button
+                className="btn btn--ghost"
+                data-testid="audit-prev"
+                disabled={page === 0}
+                onClick={() => onPage(page - 1)}
+              >Newer</button>
+              <span className="cell-sub" data-testid="audit-page">page {page + 1} of {pages}</span>
+              <button
+                className="btn btn--ghost"
+                data-testid="audit-next"
+                disabled={page + 1 >= pages}
+                onClick={() => onPage(page + 1)}
+              >Older</button>
             </div>
           )}
         </>
       )}
-      <p className="cell-sub" role="note">
-        Denied attempts are recorded too. A log of successes only cannot answer who tried what.
-      </p>
-      <span hidden onClick={() => onError?.(null)} />
     </section>
   );
 }

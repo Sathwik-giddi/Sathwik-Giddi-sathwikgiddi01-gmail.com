@@ -145,35 +145,43 @@ export function register(router) {
     const session = stmt(ctx.db, 'sessionById').get(params.id);
     if (!session || session.org_id !== ctx.orgId) throw notFound();
 
+    // Sweep first, like every other session read and write. Without it, stopping a session whose
+    // TTL had already passed recorded `user_stopped`, which is a false statement about why it
+    // ended: it ended because the clock ran out, and the audit trail is the place that has to be
+    // right. This was the only session path that did not sweep.
+    expireStaleSessions(ctx.db, { orgId: ctx.orgId });
+    const live = stmt(ctx.db, 'sessionById').get(session.id);
+
     return auditDenials(ctx.db, ctx, { action: 'session.terminate', targetType: 'session', targetId: session.id }, () => {
-      const isMine = session.user_id === ctx.userId;
+      const isMine = live.user_id === ctx.userId;
 
       // Your own session, or `session:terminate`. Note the ORDER: a person who is both ends their
       // own session as `user_stopped`, because that is the more accurate record of what happened.
       if (!isMine) ctx.resolver.assertCan('session:terminate');
 
-      if (session.state !== 'active') {
-        // Already ended. Returning the row is more useful than a 409: the caller's intent — "make
-        // sure this is not running" — is satisfied, and the reason it stopped is in the response.
-        return send(res, 200, sessionView(session, {}));
+      if (live.state !== 'active') {
+        // Already ended — possibly by the sweep above, which is the point. Returning the row is
+        // more useful than a 409: the caller's intent ("make sure this is not running") is
+        // satisfied, and the reason it stopped is in the response.
+        return send(res, 200, sessionView(live, {}));
       }
 
       const reason = isMine ? 'user_stopped' : 'admin_terminated';
       const stop = ctx.db.transaction(() => {
-        stmt(ctx.db, 'endSession').run(reason, new Date().toISOString(), session.id);
+        stmt(ctx.db, 'endSession').run(reason, new Date().toISOString(), live.id);
         audit(ctx.db, {
           orgId: ctx.orgId,
           actorId: ctx.userId,
           action: isMine ? 'session.stop' : 'session.terminate',
           targetType: 'session',
-          targetId: session.id,
+          targetId: live.id,
           result: 'allow',
           requestId: ctx.requestId,
         });
       });
       stop();
 
-      return send(res, 200, sessionView(stmt(ctx.db, 'sessionById').get(session.id), {}));
+      return send(res, 200, sessionView(stmt(ctx.db, 'sessionById').get(live.id), {}));
     });
   });
 }

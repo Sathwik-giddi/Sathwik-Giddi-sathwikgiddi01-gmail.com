@@ -923,6 +923,64 @@ mechanism working correctly, and my test mistaking it for the bug. Twice I also 
 assertion was meant to be checking. The behaviour was right and the test was wrong, which is now
 the fifth time this phase that sentence has been true, and it is the most useful thing in it.
 
+### 13. A shipped control that displayed a falsehood
+
+The audit card owned `const [page, setPage] = useState(0)`, rendered `page N of M`, and offered
+Newer/Older buttons. `App` passed it `events` and `total` and nothing else — the state and the
+fetch both already lived in `Shell`. So clicking **Older** changed the heading to "page 2 of 3"
+while the table still showed page 1's fifty rows, and **no request was made**.
+
+A control that lies is worse than a missing control, because the user has no way to tell the data
+did not move. The fix was to pass `page` and `onPage` down rather than to duplicate either, and the
+test asserts the thing the old version could not satisfy: the row count *changes* and a request
+*happens*.
+
+I also named the two buttons `audit-older` / `audit-newer` — **inverted relative to their own
+labels**, because "Older" increments the page index. The test caught it by clicking a disabled
+button. They are `audit-prev` / `audit-next` now. An attribute whose name contradicts its
+behaviour is a trap for the next person, including me.
+
+### 14. An N+1 that grew with the org, and two failures that said nothing
+
+`RolePicker` ran `useEffect(api.reference, [])` and is instantiated **once per member row**. So a
+fifty-person org issued fifty requests, each returning the full 20-permission / 27-pattern
+catalogue — the "one request per row" antipattern `BRIEF.md §6` names by name, in the one card
+whose whole point is listing people. `Shell` now fetches it once and threads it down, and the test
+counts the requests against the row count.
+
+Both of its failure paths were also wrong, and in the same way:
+
+```js
+.catch(() => { if (live) setRoles([]); })   // a <select> with zero options, no message
+.catch(() => {})                           // the grants form with zero checkboxes, no message
+```
+
+Those were **the only two places in the console where a failure produced no explanation at all** —
+a silent empty form is indistinguishable from an empty org. `BRIEF.md §3.2(5)` asks for the reason
+to be readable rather than swallowed, and I had written the exception without noticing.
+
+### 15. A boot that could hang for ever
+
+`setBooting(false)` was only reached if `loadMe()` resolved. One failed `/auth/me` during boot left
+the page on "Restoring your session…" with no shell, no error, and no way forward — the exact state
+`BRIEF.md §3.2(5)` calls indistinguishable from a broken app. Now a `finally`, and the reason is
+carried to the sign-in gate. Asserted by making `/auth/me` fail and requiring a resolvable screen
+rather than a spinner.
+
+### Four more, cheap and worth having
+
+- **`DELETE /sessions/:id` never swept lapsed sessions**, so stopping one whose TTL had passed
+  recorded `user_stopped` — a false statement about why it ended, in the audit trail, which is the
+  one place that has to be right. It was the only session path not sweeping.
+- **The invite path used `assertCanModify` against a role with no membership**, so an admin inviting
+  an admin was refused with "a admin cannot modify a admin". Nobody is being modified by an invite;
+  it is `assertRoleAssignable`.
+- **The transfer dialog asked for an organization id** in a `window.prompt` — unusable without
+  already knowing an id, and the one place a user could walk into the existence probe from Phase
+  9d. It now offers the organizations the caller can actually see, by name.
+- **Self-suspend and self-remove returned 400** while self-role-change returned 403. One family of
+  mistake gets one answer now.
+
 ### The pattern across all three
 
 Every one is a check I ran, and none of them was a check that could fail. I asserted the 401 and

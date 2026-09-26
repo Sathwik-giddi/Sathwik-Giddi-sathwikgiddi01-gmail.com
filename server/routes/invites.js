@@ -21,7 +21,7 @@ import { newId, nowIso } from '../db.js';
 import { newInviteToken, hashInviteToken, hashPassword, verifyPassword } from '../auth.js';
 import { requireEmail, requireString, requirePassword, translateConstraint, LIMITS } from '../internal/http.js';
 import { audit, auditDenials, auditSuccess } from '../audit.js';
-import { assertRoleExists, assertCanModify } from '../lifecycle.js';
+import { assertRoleExists, assertRoleAssignable } from '../lifecycle.js';
 
 const INVITE_TTL_DAYS = 7; // D17
 
@@ -75,7 +75,12 @@ export function register(router) {
 
       // Handing out a role above your own is the same rule as assigning one (D8), so the invite
       // path cannot be used to sidestep the role-change path.
-      assertCanModify(ctx.db, ctx.role, role);
+      //
+      // `assertRoleAssignable`, not `assertCanModify`. I had the latter here, which compares the
+      // caller's rank against the INVITED role as if it were an existing member — and since an
+      // invited role has no membership to be "strictly lower" than, an admin inviting an admin was
+      // refused with "a admin cannot modify a admin". Nobody is being modified by an invite.
+      assertRoleAssignable(ctx.db, ctx.role, role);
 
       // Already an ACTIVE member? The `memberships(org_id, user_id)` unique index is the real
       // guarantee, but a 409 here is a far better message than a raw constraint error, and it is

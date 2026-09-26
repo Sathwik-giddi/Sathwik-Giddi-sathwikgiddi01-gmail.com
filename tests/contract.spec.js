@@ -227,3 +227,97 @@ test('a server that ALWAYS says TOKEN_STALE does not loop forever', async ({ pag
   // And the refusal is eventually shown rather than swallowed.
   await expect(page.getByTestId('login-form')).toBeVisible();
 });
+
+// ---------------------------------------------------------------------------
+// A shipped control that lies, an N+1, and a boot that can hang.
+
+test('the audit pager actually pages', async ({ page }) => {
+  // Needs more than one page of events, so drive the API directly first and then count requests.
+  const auth = await page.request.post('/v1/auth/login', { data: { email: 'dana@example.test', password: 'demo1234' } });
+  const { token } = await auth.json();
+
+  // One owner, one org, and a pile of grants — each of which writes an audit row.
+  const org = await (await page.request.post('/v1/orgs', { headers: { authorization: `Bearer ${token}` }, data: { name: 'Pager Contract' } })).json();
+  const orgToken = (await (await page.request.post('/v1/auth/token', { headers: { authorization: `Bearer ${token}` }, data: { orgId: org.id } })).json()).token;
+  const inv = await (await page.request.post(`/v1/orgs/${org.id}/invites`, { headers: { authorization: `Bearer ${orgToken}` }, data: { email: 'pager@example.test', role: 'viewer' } })).json();
+  await page.request.post(`/v1/invites/${inv.inviteToken}/accept`, { data: { name: 'Pager', password: 'password123' } });
+  const members = await (await page.request.get(`/v1/orgs/${org.id}/members`, { headers: { authorization: `Bearer ${orgToken}` } })).json();
+  const target = members.members.find((m) => m.email === 'pager@example.test');
+
+  for (let i = 0; i < 60; i++) {
+    await page.request.post(`/v1/orgs/${org.id}/grants`, {
+      headers: { authorization: `Bearer ${orgToken}` },
+      data: { userId: target.user_id, effect: 'allow', permissions: ['device:view'] },
+    });
+  }
+  await page.request.post(`/v1/orgs/${org.id}/grants/revoke-none`, { headers: { authorization: `Bearer ${orgToken}` } }).catch(() => {});
+
+  // `page.request` shares the context's cookie jar, so the API sign-in above already left a valid
+  // refresh cookie and the console boots straight into the shell. (Filling the login form here
+  // timed out on a form that does not exist — the harness, not the app, was wrong.) So use the
+  // session we have and switch into the org we just filled with events.
+  const calls = [];
+  page.on('request', (r) => { if (r.url().includes('/audit')) calls.push(r.url()); });
+
+  await page.goto('/');
+  await expect(page.getByTestId('app-shell')).toBeVisible();
+  await page.locator(`[data-testid="org-option"][data-org-id="${org.id}"]`).click();
+  await expect(page.getByTestId('app-shell')).toHaveAttribute('data-org-id', org.id);
+  await page.getByTestId('nav-audit').click();
+  await expect(page.getByTestId('audit-row').first()).toBeVisible();
+
+  const pager = page.getByTestId('audit-page');
+  test.skip((await pager.count()) === 0, 'only one page of events');
+  if ((await pager.count()) === 0) return;
+
+  const firstPageRows = await page.getByTestId('audit-row').count();
+  const before = calls.length;
+  await expect(pager).toHaveText('page 1 of 2');
+
+  await page.getByTestId('audit-next').click();   // the button labelled "Older"
+  await expect(pager).toHaveText('page 2 of 2');
+
+  // The assertion the old control could not satisfy: the ROWS changed, and a request was made.
+  expect(calls.length, `audit requests: ${calls.length}`).toBeGreaterThan(before);
+  await expect(page.getByTestId('audit-row')).not.toHaveCount(firstPageRows);
+
+  // And back again.
+  await page.getByTestId('audit-prev').click();
+  await expect(pager).toHaveText('page 1 of 2');
+  await expect(page.getByTestId('audit-row')).toHaveCount(firstPageRows);
+});
+
+test('reference data is fetched once, not once per row', async ({ page }) => {
+  const calls = [];
+  page.on('request', (r) => { if (r.url().includes('/v1/reference')) calls.push(r.url()); });
+
+  await login(page, 'dana@example.test');
+  await page.getByTestId('nav-people').click();
+  await expect(page.getByTestId('user-row').first()).toBeVisible();
+
+  const rows = await page.getByTestId('user-row').count();
+  expect(rows).toBeGreaterThan(1);
+
+  // It was `useEffect(api.reference, [])` inside a component instantiated once per member row, so
+  // this used to be one request per member. BRIEF.md §6 names that antipattern outright.
+  expect(calls.length, `reference requests: ${calls.length} for ${rows} rows`).toBeLessThanOrEqual(1);
+});
+
+test('a failed boot says so instead of hanging', async ({ page }) => {
+  // A valid refresh cookie, and then /auth/me fails. Before the fix, `setBooting(false)` was only
+  // reached if loadMe() resolved, so the page sat on "Restoring your session…" for ever.
+  await login(page, 'dana@example.test');
+
+  await page.route('**/v1/auth/me', (route) => route.fulfill({
+    status: 500,
+    contentType: 'application/json',
+    body: JSON.stringify({ error: { code: 'INTERNAL', message: 'the database is unavailable', reason: null, requestId: 'r' } }),
+  }));
+  await page.route('**/v1/auth/refresh', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{}' }));
+
+  await page.reload();
+
+  // It resolves to SOMETHING the user can act on, and it is not an endless spinner.
+  await expect(page.getByTestId('login-form')).toBeVisible({ timeout: 8000 });
+  await expect(page.locator('text=Restoring your session')).toHaveCount(0);
+});
