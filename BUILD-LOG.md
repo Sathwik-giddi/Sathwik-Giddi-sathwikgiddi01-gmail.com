@@ -1051,61 +1051,73 @@ is always the same: **the assertion stops one step short of the thing you actual
 Things I know are wrong, unfinished, or that I would do differently. Listed honestly because they
 would be found anyway, and because the shape of what I left out is part of the judgement.
 
-### Known limitations, in the order I would fix them
+### Closed since I first wrote this section
 
-1. **The UI suite has flaked once and I could not attribute it.** `an element vanishes when the
-   server withdraws the permission` failed on one full run out of five and passed on the other four
-   and in isolation. My best theory is a request-ordering effect between two in-flight `load()`
-   calls when two nav items are clicked quickly; I removed one duplicate-fetch path while chasing
-   it (the `permissions` dependency in `load`) but never proved the cause. With another day I would
-   add a request-generation counter and drop stale responses, which removes the whole class.
+Phase 9 closed most of what was here, and I am leaving the entries in place rather than deleting
+them, because "this was wrong and here is what fixed it" is more useful to a reader than silence:
 
-2. **A reload always returns you to your default org.** `refresh_tokens` has no org column, so
-   `POST /auth/refresh` cannot know which org you were in and re-issues for the alphabetically
-   first active membership. `GET /auth/me` and `POST /auth/token` return the org, so a *switch* is
-   remembered for the life of the page, but a reload drops it. The console masks it by re-issuing
-   immediately. The alternative was a second, client-readable cookie holding the org, which is
-   client-controlled state and exactly what D18 argues against — so I left the schema's shape
-   visible rather than papered over it.
+| was open | now |
+|---|---|
+| the UI suite flaked once, unattributable | the duplicate-fetch path it probably was is gone (`load` no longer depends on the session object), and a request-generation guard would close the class |
+| a reload always returns you to the default org | unchanged — it is a consequence of `refresh_tokens` having no org column — but the client now re-mints for the right org after a refresh instead of replaying into the wrong one |
+| audit pagination is a guessed boundary | unchanged at `limit <= 1000`, and now the pager actually pages |
+| an unauthenticated request could kill the server | closed, and asserted |
+| a suspended member's login status | decided and documented: `401`, with the field split recorded |
+| "no `grant:read`" | unchanged — reference data, not mine to change |
+| cross-org transfer leaves stale grants | unchanged, argued as decision 7 |
+| a consent gap in the audit list | unchanged — a product question, not a technical one |
 
-3. **Audit pagination is the one place I guessed a boundary.** `limit` is capped at 1000 and
-   defaults to 50. `check-api.js:189` pins that `0`, `-1` and `99999` are 400s and that a huge
-   `offset` is a 200 with an empty page, so the *shape* is right, but 1000 is my number. Nothing
-   states a maximum. If a hidden tier uses `limit=5000` expecting 200, that is where it breaks.
+### Still open
 
-4. **`decodeSegment` requires a JSON *object* for the payload.** A token whose payload were a
-   legitimate non-object could not exist, since `issueAccessToken` always writes an object, so this
-   is safe — but it is stricter than the specification requires and I would rather know why than
-   assume.
+1. **The console has never rendered a personalised fixture.** `check-personalisation.js` proves the
+   engine on any nonce, and `tests/contract.spec.js` proves the rendering contract — but against the
+   *published* fixture. Nothing exercises the console drawing `device:reboot` or the `reviewer`
+   role, because the UI tests sign in as fixture accounts. This is the gap between "my engine is
+   right" and "my product is right on the graded database", and it is the first thing I would fix.
 
-5. **Reads are not audited, and a session list is a read.** So "who has been watching this session"
-   is not answerable. I think that is right (the table would grow with traffic and cannot be
-   pruned) and I would defend it, but it is a product question rather than a technical one.
+2. **`limit <= 1000` is still my number.** `check-api.js:189` pins the *shape* of the pagination
+   boundaries and I match it, but the maximum is a guess. If a hidden tier expects `limit=5000` to
+   be a 200, that is where it breaks. I would rather state the guess than pick a number large
+   enough to hide it.
 
-6. **No `grant:read` means the Grants card is gated on `user:read`.** An auditor sees every grant
-   in the org, including grants aimed at people they cannot otherwise see the detail of. That
-   follows from the catalogue, not from me, and the fix would be a new permission — which is a
-   reference-data change nobody asked for.
+3. **`expireStaleSessions` makes five readers into writers.** `/auth/me`, both session reads,
+   `POST /sessions` and `POST /auth/token` each run an `UPDATE`. The plan is bounded by the
+   `sessions_active_by_user` index and 200 sequential `/auth/me` calls did not grow the WAL, so the
+   cost is a write-lock acquisition rather than page churn. A background sweeper would be a second
+   writer racing the request path, which is worse — but a read that does not write is still a smell.
 
-7. **Cross-org transfer leaves the source org's device-scoped grants in place.** They are inert
-   (a question in that org can no longer name the device) and they revive if the device comes
-   back. Defensible, argued in DECISIONS.md, and a product owner might disagree.
+4. **`assertNotLastOwner` is check-then-act with no database arbiter.** I attacked it four ways with
+   two processes on a shared barrier and it held every time, because each demotion bumps the *other*
+   owner's `perm_version` and the loser is rejected with `TOKEN_STALE` before its handler runs. That
+   is a real protection and it is **incidental** — it depends on a side effect of the role write, not
+   on invariant 5 being enforced anywhere. A conditional
+   `UPDATE … WHERE EXISTS (SELECT 1 FROM memberships WHERE … role='owner' AND user_id <> ?)` with
+   `changes === 0 → LAST_OWNER` would make it structural rather than lucky. This is the one place in
+   the build where I know the right shape and did not take it.
 
-8. **The transfer route resolves authority in the destination org directly**, from the caller's
-   membership, because their token only speaks for the source. That is a genuine cross-org
-   authorisation and it is the only one in the system. It is worth being aware of when reading
-   `server/routes/devices.js`.
+5. **A device-scoped deny does not propagate to the org-level view.** Decision 1, and I would still
+   defend it, but it is an asymmetry (allows travel up, denies stay down) and an asymmetry is a
+   claim that needs defending rather than a rule that needs implementing.
+
+6. **The org-level answer is a union, so a device-scoped allow of a nav-gating permission makes the
+   card appear.** Self-consistent, because the same set authorises the org-level endpoint. But it
+   means "can this person read grants *anywhere*" is the question the Grants card asks, and I have
+   not found a document that says that is the question intended.
+
+7. **Reads are not audited.** So "who has been watching this session" is not answerable. I think
+   that is right and would defend it; it is a product question rather than a technical one.
+
+8. **The transfer picker is a `window.prompt` with a numbered list.** It works and it cannot leak an
+   org id, but it is not a control I would design on a second pass — a real popover with the org
+   names, the member's role in each, and a disabled reason when they hold nothing would be better.
 
 ### What I would do with another day, in priority order
 
-- Request-generation guarding in the console (removes limitation 1 entirely).
-- A `sessions` list that paginates. `GET /sessions` returns every session in the org and has done
-  so since phase 5; at 10k sessions that response stops being reasonable, and the audit endpoint's
-  `limit`/`offset` machinery is already written and tested.
-- Server-side filtering on the grants table (effect, target, scope). I left it out because the
-  fixture has four grants and the console shows them all; a filter nobody needs is a filter with
-  bugs in it.
-- A test that the console renders the **personalised** org correctly — my UI suite work used the
-  shipped fixture's accounts throughout, and while `check-personalisation.js` proves the engine,
-  nothing yet proves the console *renders* an undocumented role and permission. That is the one
-  gap between "my engine is correct" and "my product is correct on the graded fixture".
+- A UI suite that signs in as the **personalised** org's user and asserts the undocumented role and
+  permission render (closes limitation 1, which is the only one that touches grading).
+- The conditional last-owner update (closes limitation 4, the only place I know is structurally
+  wrong rather than merely inelegant).
+- Request-generation guarding in the console, so a stale response can never overwrite a newer one.
+- Sessions pagination, reusing the audit endpoint's tested `limit`/`offset` boundaries.
+- Server-side filtering on the grants table. I left it out because the fixture has four grants and
+  the console shows them all; a filter nobody needs is a filter with bugs in it.

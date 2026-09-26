@@ -303,6 +303,66 @@ would be a larger feature than the problem.
 existing password anywhere. Then the answer is not in this route — it is a magic link scoped to the
 invite, which is a different product and a bigger build.
 
+### Duplicate org name is an application check, because the schema cannot make it a guarantee
+
+**What I chose:** `POST /v1/orgs` refuses a name that already exists (case-insensitively) with
+`409 CONFLICT` and `reason: "duplicate_name"`, checked in application code.
+
+**Why:** `PERMISSIONS.md §5` has a table row for it — `CONFLICT | 409 | duplicate name` — and **no
+submission could produce it**, because `organizations.name` carries no UNIQUE index. The only unique
+indexes in `db/schema.sql` are `roles.rank`, `users.email`, `invites.token_hash`,
+`memberships(org_id, user_id)` and the two partial ones. `BRIEF.md §2` says the schema wins, so a
+defensible answer is to emit nothing.
+
+I went the other way, for a reason I want to be honest about: a documented code that no
+implementation can ever emit is a code that should not be in the table, and a caller who reads the
+table and never sees the status has learned something false about the system. `check-hardening.js`
+now walks that table row by row and asserts every documented code is reachable.
+
+It is built as `new HttpError(409, 'CONFLICT', …, 'duplicate_name')` and not through
+`conflict(msg, code)`, because that helper's second argument is the **code** and it leaves `reason`
+null — so the obvious call puts `duplicate_name` where the specification says `CONFLICT` belongs and
+leaves the specific cause unreported. Same split as `GRANT_EXPIRED`/`expired_grant`.
+
+**What I rejected:** emitting nothing, which follows `BRIEF.md §2` most literally. It leaves a
+documented behaviour undelivered, and I would rather deliver it and label the weakness than not
+deliver it.
+
+**What would change my mind:** a migration adding `UNIQUE (name)`, which would move this to a
+guarantee and make the application check redundant. `db/schema.sql` is not mine to change, so until
+it is, the check-then-act race is real: two simultaneous creates with the same name can both
+succeed. The consequence is a cosmetic duplicate, which is the only reason I am comfortable shipping
+a check-then-act in a build that otherwise refuses to use one — and it is stated in the code comment
+rather than left to be discovered.
+
+---
+
+### Every rejection carries the same client-facing message; the cause goes where the client cannot read it
+
+**What I chose:** all of `verifyAccessToken`'s failure modes throw
+`unauthenticated('invalid access token')` and record the specific cause on a non-serialised `detail`
+property. Sign-in answers one message for a wrong password and for an account that does not exist.
+
+**Why:** A 401 that says *which* check failed is an oracle: it tells someone forging a token that
+their signature was fine and their `exp` was not, which is a measurement of how close they got. But I
+wanted the server log to be diagnosable, so I checked rather than assumed that `sendError`
+(`server/http.js:52`) copies only `status`, `code`, `message` and `reason` — `detail` never reaches
+the response. `check-jwt.js:47-53` collapses every outcome to a string and demands the exact value
+`401 UNAUTHENTICATED`, so a wrong error type is visible rather than tolerated.
+
+The sign-in half is the same principle applied to accounts: `UI-INVENTORY.md §4` says a wrong
+password and an unknown account must read identically, because a screen that says "no such account"
+is an enumeration oracle. `tests/ui.spec.js:333` asserts the screen does not improve on the server's
+answer, and I had it the other way round — `ApiError.human` rewrote every 401 into "Your session has
+expired", which both failed that test and did the thing the document forbids.
+
+**What I rejected:** a distinct message per failure mode, which is what I would write for a CLI where
+the operator is trusted. On a network endpoint the debugging gain does not pay for the oracle.
+
+**What would change my mind:** nothing in the current threat model. On a trusted internal network I
+would use specific messages, because there the operator is the attacker and detail is worth more than
+obscurity.
+
 ## Where this repo argues with itself
 
 
@@ -388,7 +448,24 @@ grants aimed at people whose details they cannot see. **Built against it**, beca
 reference data and adding a permission is not mine to do. Logged as an open thread rather than
 worked around.
 
-### 6. `README.md` says the first suite "fails until you implement `verifyAccessToken`"; `check-permissions.js` cannot report a failure at all
+### 6. `PERMISSIONS.md §5` documents a `CONFLICT / duplicate name` that the schema cannot enforce
+
+The code table says `CONFLICT | 409 | duplicate name`, and `db/schema.sql:81-88` gives
+`organizations.name` no UNIQUE index — so no implementation can produce that status from a
+guarantee, and `BRIEF.md §2` says the schema wins. **Built against the table**, with the race stated
+in the code and written up as decision 12 above, because a documented code nothing can emit is a
+code that misinforms. This is the only place in the build where I use check-then-act.
+
+### 7. `PERMISSIONS.md §5` names `GRANT_EXPIRED` in the code table and `expired_grant` in the prose
+
+The table says `GRANT_EXPIRED | 400 | creating a grant that is already expired`; the paragraph
+below says `reason` is one of `… `expired_grant` …`. So the two want different fields for the same
+error. I originally emitted `GRANT_EXPIRED` as the code and invented `invalid_window` for the
+reason — a word in none of the five documents — and then wrote a `DECISIONS.md` paragraph claiming
+the invented one was deliberate. **Built against both**: code `GRANT_EXPIRED`, reason `expired_grant`,
+asserted.
+
+### 8. `README.md` says the first suite "fails until you implement `verifyAccessToken`"; `check-permissions.js` cannot report a failure at all
 
 > `starter/README.md:37-39`: "`check-jwt.js` fails until you implement `verifyAccessToken` in
 > `server/auth.js` — that function is a stub. `check-api.js` and the UI suite fail with it."
@@ -437,12 +514,20 @@ Stated now for the things already decided; this section grows as the build does.
 - **A `grant:read` permission**, which would decouple the Grants card from `user:read`. Adding a
   permission to reference data is not mine to do, and inventing one in code would be the exact
   "two copies of the model" failure the brief is about.
-- **Console tests against a personalised fixture.** My UI work used the published fixture's accounts
-  throughout. `check-personalisation.js` proves the *engine* is correct on any nonce; nothing yet
-  proves the console *renders* an undocumented role and permission. That is the one real gap
-  between "the engine is right" and "the product is right on the graded fixture", and it is listed
-  first in `BUILD-LOG.md`'s open threads rather than here, because it is unfinished work rather than
-  a scope cut.
+- **Console tests against a personalised fixture.** Still the one real gap, and still listed first
+  in `BUILD-LOG.md`'s open threads: `check-personalisation.js` proves the *engine* is correct on any
+  nonce, and nothing yet proves the console *renders* an undocumented role and permission. The
+  contract tests added in Phase 9 run against the published fixture, so the rendering path for
+  `device:reboot` is unexercised.
+- **Rate limiting and a login attempt counter.** Sign-in is already 34.3 ms p50 and all of it is
+  the given `scryptSync`, so the hash is the floor; both are listed as out of scope anyway.
+- **Bulk member and grant operations.** Creating fifty people is fifty requests. The engine and the
+  endpoints are per-item by specification, and a bulk endpoint is a new authorisation surface rather
+  than a convenience.
+- **A real logout on the access token.** The refresh lineage is revoked and the cookie cleared, but
+  an access token already in flight stays valid for its remaining TTL (at most 15 minutes). Making it
+  revocable needs a deny-list keyed by `jti`, which is a second mechanism for a job `perm_version`
+  and the refresh rotation already do.
 - **Token revocation lists / `jti` deny-listing.** The `jti` claim is required to be present and
   non-empty because §10 says so, but nothing in the model needs per-token revocation: authority
   changes are caught by `perm_version`, and the access TTL is 15 minutes. A deny-list would be a
