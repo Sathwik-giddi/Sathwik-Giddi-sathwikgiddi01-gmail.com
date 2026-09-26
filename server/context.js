@@ -84,16 +84,38 @@ export function authenticate(db, secret) {
     // suspect as a stale one, and this is the one place that notices.
     assertFresh(claims, membership);
 
+    const user = stmt(db, 'userById').get(claims.sub);
+    if (!user) throw unauthenticated('not a member of this org');
+
     return {
       userId: claims.sub,
       orgId: claims.org,
       role: claims.role,
+      user,
       membership,
       claims,
       org: { id: row.org_id, name: row.org_name, theme: row.org_theme, maxSessionMinutes: row.max_session_minutes },
       resolver: createResolver(db, { userId: claims.sub, orgId: claims.org }),
     };
   };
+}
+
+/**
+ * Best-effort authentication, for the one public route that is nicer when you are signed in.
+ *
+ * `POST /invites/:token/accept` is public: a stranger redeeming an invite has no token. But an
+ * EXISTING user accepting an invite must not be asked for a password, and must not have one
+ * reset by a link in their inbox. So the route asks "who is this, if anyone?" and branches:
+ * nobody redeems as a new account, somebody redeems as the account they already hold. This
+ * returns null for every failure rather than throwing, because "not signed in" is a normal
+ * answer here and not an error.
+ */
+export function optionalCaller(db, secret, req) {
+  try {
+    return authenticate(db, secret)(req, {});
+  } catch {
+    return null;
+  }
 }
 
 /**
