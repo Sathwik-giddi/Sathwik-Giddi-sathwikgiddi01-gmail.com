@@ -9,3 +9,6 @@ e2e.db-shm
 dist/
 test-results/
 playwright-report/
+
+# local-only: see the header comment inside the file
+playwright.local.config.js
