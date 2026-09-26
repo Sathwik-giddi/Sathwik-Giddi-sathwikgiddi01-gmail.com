@@ -5,7 +5,7 @@
 // The published fixture (seed/orgs.json) and the prose specs together describe the
 // whole model: 5 roles, 19 permissions, one role->permission matrix, one device-scoped
 // grant. That is enough to hardcode a passing implementation without ever reading the
-// database — which is the failure mode this file removes.
+// database, which is the failure mode this file removes.
 //
 // This module adds ONE extra organization to the candidate's database, containing:
 //   - a role that appears in no document
@@ -36,7 +36,7 @@ import { readFileSync } from 'node:fs';
 
 export const THEMES = ['cobalt', 'amber', 'moss', 'plum', 'rust', 'teal'];
 
-// The 19 documented permissions. Used ONLY to draw a plausible baseline subset — never
+// The 19 documented permissions. Used ONLY to draw a plausible baseline subset, never
 // to decide allow/deny, and never as an exhaustive truth. If a permission is ever added
 // to db/reference.sql without being listed here, the overlay is unaffected.
 export const DOCUMENTED_PERMISSIONS = [
@@ -186,7 +186,7 @@ export function buildOverlay(nonce) {
 
 /**
  * The outcomes an engine must produce for this overlay, derived from the overlay itself
- * so no expected value is ever hardcoded — not here, and not in the grading tier.
+ * so no expected value is ever hardcoded, not here, and not in the grading tier.
  */
 export function expectations(overlay) {
   const allow = overlay.grants.find((g) => g.effect === 'allow');

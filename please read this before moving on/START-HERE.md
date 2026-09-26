@@ -1,7 +1,7 @@
 # Please read this before moving on
 
 This is a **simple, step-by-step guide** to this project. Every step is written in plain words.
-You do not need to know anything about programming to follow it — just a terminal and about ten
+You do not need to know anything about programming to follow it, just a terminal and about ten
 minutes.
 
 If you only do one thing, do **Part 1**. It gets the app running on your screen.
@@ -29,34 +29,34 @@ app decides what each person is allowed to do, every single time they click some
 | What | Why | How to check |
 |---|---|---|
 | **Node.js version 22** | The program is written in JavaScript, and Node.js is what runs it. | Open a terminal and type `node -v`. If it says `v22` or higher, you are ready. |
-| **A terminal** | The window where you type commands. On a Mac use Terminal; on Windows use PowerShell. | — |
-| **About 10 minutes** | Mostly waiting for things to install. | — |
+| **A terminal** | The window where you type commands. On a Mac use Terminal; on Windows use PowerShell. |, |
+| **About 10 minutes** | Mostly waiting for things to install. |, |
 
 If `node -v` says something lower than 22, or says "command not found", you need to install
 Node.js from [nodejs.org](https://nodejs.org) first.
 
 ---
 
-# Part 1 — Get it running
+# Part 1, Get it running
 
 You type each line into your terminal, one at a time, and press Enter after each one.
 
-### Step 1 — Go into the project folder
+### Step 1, Go into the project folder
 
 ```sh
 cd remoteops
 ```
 
-### Step 2 — Install the pieces it needs
+### Step 2, Install the pieces it needs
 
 ```sh
 npm install
 ```
 
 This downloads the parts the program needs. It takes a minute or two. You may see a lot of text
-scroll past — that is normal, and it is supposed to look busy.
+scroll past, that is normal, and it is supposed to look busy.
 
-### Step 3 — Load the sample data
+### Step 3, Load the sample data
 
 ```sh
 npm run db:reset
@@ -68,16 +68,16 @@ look at. This step loads that pretend data.
 You should see a list of things and their counts, ending with a few lines that tell you sample
 sign-in details. **You did it right if you see the words `organizations=3` and `users=8`.**
 
-### Step 4 — Start the app
+### Step 4, Start the app
 
 ```sh
 npm run dev
 ```
 
-**The app is now running. Leave this window open** — closing it stops the app. You should see a line
+**The app is now running. Leave this window open**, closing it stops the app. You should see a line
 that says `RemoteOps on http://localhost:8080`.
 
-### Step 5 — Open it in your browser
+### Step 5, Open it in your browser
 
 Go to this address in your web browser:
 
@@ -85,12 +85,12 @@ Go to this address in your web browser:
 http://localhost:8080
 ```
 
-You should see a sign-in form. **Stop here if you just want to look around** — the next part tells
+You should see a sign-in form. **Stop here if you just want to look around**, the next part tells
 you how to sign in.
 
 ---
 
-# Part 2 — Sign in
+# Part 2, Sign in
 
 Every sample account uses the same password: **`demo1234`**
 
@@ -111,12 +111,12 @@ Every sample account uses the same password: **`demo1234`**
    have completely different people and machines.
 
 Then sign in as `viewer@acme.test` and notice how **much less there is to click**. That is not
-cosmetic — the buttons a viewer cannot use are not just hidden, the app also refuses to do the work
+cosmetic, the buttons a viewer cannot use are not just hidden, the app also refuses to do the work
 if you ask it directly. Hiding a button is a convenience. Refusing the work is the protection.
 
 ---
 
-# Part 3 — Check that it works
+# Part 3, Check that it works
 
 Four commands. Each one checks something different. Run them in your terminal (press `Ctrl+C` first
 if the app is still running in that window, or use a second terminal window).
@@ -156,7 +156,7 @@ npm run pentest
 This is a smaller, nastier version of the same idea. It attacks the part of the app that decides who
 you are.
 
-**You did it right if it says `no breach`** — which means none of its attacks worked.
+**You did it right if it says `no breach`**, which means none of its attacks worked.
 
 ### 4. Does the screen actually work?
 
@@ -165,7 +165,7 @@ npm run build
 npx playwright test
 ```
 
-This opens a real web browser and pretends to be a person clicking through the app — 38 times. It
+This opens a real web browser and pretends to be a person clicking through the app, 38 times. It
 checks that buttons are there, that the right buttons are hidden, and that a wrong password shows a
 friendly message.
 
@@ -173,12 +173,12 @@ friendly message.
 
 > **One note:** the first time you run this, it may stop and say the browser is missing. If so, run
 > `npx playwright install chromium` once, then try again. If that download fails (it sometimes does
-> on slow or blocked networks), the rest of this document still works — only this one check is
+> on slow or blocked networks), the rest of this document still works, only this one check is
 > affected.
 
 ---
 
-# Part 4 — Running it "for real"
+# Part 4, Running it "for real"
 
 Part 1 runs in **development mode**, which is a helper mode. It is fine for looking around, but it
 is not safe to put on the internet.
@@ -187,7 +187,7 @@ For the real thing, the app insists on **three secret codes**. What a secret cod
 string that only your server knows. It is like the combination to a safe. Someone who does not have
 it cannot get in.
 
-The app **refuses to start** without them. That is on purpose — it is much safer to fail to start
+The app **refuses to start** without them. That is on purpose, it is much safer to fail to start
 than to start with a guessable secret.
 
 ```sh
@@ -215,7 +215,7 @@ What each one is for, in one line each:
 | `PASSWORD_PEPPER` | Passwords. It is mixed in **before** the password is scrambled, so if someone steals the database, **the stolen passwords cannot be guessed at all** |
 
 > **Keep the pepper safe.** If you lose it, nobody can sign in any more, and there is no way to
-> recover it. Write it down somewhere safe — the same place you keep the other two.
+> recover it. Write it down somewhere safe, the same place you keep the other two.
 
 ---
 
@@ -228,7 +228,7 @@ Here is the whole project, explained.
 | Folder or file | What it is |
 |---|---|
 | `web/` | The screen you look at. |
-| `server/` | The part that makes decisions. Nobody sees this — it sits behind the screen. |
+| `server/` | The part that makes decisions. Nobody sees this, it sits behind the screen. |
 | `db/` | The shape of the data, and the list of what people are allowed to do. |
 | `seed/` | The pretend companies, people and machines. |
 | `scripts/` | The tools that check the app works. |
@@ -260,7 +260,7 @@ When you sign in, the app gives you a small **ticket** that says which company y
 
 This is the important bit. If the company always came from the address bar, a person could simply
 type someone else's company name into the address and be let in. Because it comes from the ticket
-instead, the app is saying "you said you are in Acme, so we will only ever show you Acme" — and if you
+instead, the app is saying "you said you are in Acme, so we will only ever show you Acme", and if you
 ask about Globex, the app answers as if Globex **does not exist**.
 
 The app answers "nothing here" rather than "you are not allowed". That is deliberate: saying "you are
@@ -291,23 +291,23 @@ There are 20 specific powers, like `device:terminal` ("open a terminal on a mach
 
 Two things can hand someone a power that their role does not have:
 
-- **A grant** — someone with permission gives one person one extra power, optionally for one machine
+- **A grant**, someone with permission gives one person one extra power, optionally for one machine
   only, optionally with an end date.
-- **A refusal** — someone takes a power away. A refusal always wins. This is checked first.
+- **A refusal**, someone takes a power away. A refusal always wins. This is checked first.
 
 ### 4. Sessions
 
 If you press "connect to machine", the app records a **session**. A session has a time limit set by
 your company's settings, and it is recorded in the log.
 
-When someone's access changes, their sessions are **not** thrown away — but the app bumps a number
+When someone's access changes, their sessions are **not** thrown away, but the app bumps a number
 called a "version" on their account, and their old ticket stops working **the very next time they
 click something**. So a change takes effect immediately, not whenever their ticket happens to expire.
 
 ### 5. The activity log
 
 Every decision that changes access, and every refusal, is written to a list that **cannot be edited
-or deleted** — the database itself refuses. So if something goes wrong, there is a record, and
+or deleted**, the database itself refuses. So if something goes wrong, there is a record, and
 nobody can quietly tidy it away.
 
 ---
@@ -317,12 +317,12 @@ nobody can quietly tidy it away.
 | What you see | What it means | What to do |
 |---|---|---|
 | `command not found: npm` | Node.js is not installed, or not in your path. | Install Node.js 22 from [nodejs.org](https://nodejs.org), then close and reopen the terminal. |
-| `EADDRINUSE: address already in use :::8080` | The app is already running in another window. | That is fine — just open `http://localhost:8080`. Or find the other window and stop it with `Ctrl+C`. |
+| `EADDRINUSE: address already in use :::8080` | The app is already running in another window. | That is fine, just open `http://localhost:8080`. Or find the other window and stop it with `Ctrl+C`. |
 | `JWT_SECRET must be set when NODE_ENV=production` | You tried to run the real version without the three secret codes. | Do Part 4, or just use `npm run dev` instead. |
-| `PASSWORD_PEPPER must be set...` | Same thing — the pepper is missing. | Do Part 4. |
-| `password hashes reference pepper id "...", which is not configured` | The sample data was **created with a different pepper** than the one you are now running with. This only happens if you created the data twice with two different peppers — for example if you had one pepper set, made the data, then changed the pepper. | Create the data again with the pepper you are using: run `npm run db:reset` again **after** setting the three secrets. |
+| `PASSWORD_PEPPER must be set...` | Same thing, the pepper is missing. | Do Part 4. |
+| `password hashes reference pepper id "...", which is not configured` | The sample data was **created with a different pepper** than the one you are now running with. This only happens if you created the data twice with two different peppers, for example if you had one pepper set, made the data, then changed the pepper. | Create the data again with the pepper you are using: run `npm run db:reset` again **after** setting the three secrets. |
 | `no such table: users` | The sample data was never loaded. | Run `npm run db:reset`. |
-| A test says `0 failed` but you expected a failure | The tests are checking the *fixed* version. To see a real failure, break something on purpose and run the check again. | Not a problem — that is the tests working. |
+| A test says `0 failed` but you expected a failure | The tests are checking the *fixed* version. To see a real failure, break something on purpose and run the check again. | Not a problem, that is the tests working. |
 
 ---
 

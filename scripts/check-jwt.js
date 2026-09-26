@@ -4,7 +4,7 @@
 // Why the rejection cases are written the way they are: a test that only asserts
 // "this token is rejected" passes for a stub that throws unconditionally, and for a
 // function that throws the wrong error. So every negative case asserts the *shape* of
-// the rejection — a 401 UNAUTHENTICATED, nothing else. An unimplemented stub therefore
+// the rejection, a 401 UNAUTHENTICATED, nothing else. An unimplemented stub therefore
 // fails all of these rather than passing them by accident.
 
 import { createHmac, randomBytes } from 'node:crypto';
@@ -61,7 +61,7 @@ const claimOf = (token, key) => {
 const WANT = '401 UNAUTHENTICATED';
 
 // ---------------------------------------------------------------------------
-console.log('\n== §2 — a well-formed token round-trips ==');
+console.log('\n== §2, a well-formed token round-trips ==');
 const good = signToken(claims(), SECRET);
 const [h, p, s] = good.split('.');
 
@@ -75,11 +75,11 @@ check('  ...jti preserved', claimOf(good, 'jti'), 'jti-0001');
 if (outcome(good) !== 'accepted') {
   console.log('\n  NOTE: verifyAccessToken is not implemented yet, or rejects a valid token.');
   console.log('        Every rejection case below fails as a result. That is the suite working');
-  console.log('        as intended — it will not hand out free marks for a stub.\n');
+  console.log('        as intended, it will not hand out free marks for a stub.\n');
 }
 
 // ---------------------------------------------------------------------------
-console.log('\n== §10 — malformed input ==');
+console.log('\n== §10, malformed input ==');
 check('null token', outcome(null), WANT);
 check('undefined token', outcome(undefined), WANT);
 check('empty string', outcome(''), WANT);
@@ -91,7 +91,7 @@ check('payload is not JSON', outcome(forge(HS256, 'not json')), WANT);
 check('header is not an object', outcome(forge('HS256', claims())), WANT);
 
 // ---------------------------------------------------------------------------
-console.log('\n== §10 — algorithm confusion (do not trust the header) ==');
+console.log('\n== §10, algorithm confusion (do not trust the header) ==');
 check('alg: none, empty signature', outcome(forge({ alg: 'none', typ: 'JWT' }, claims(), () => Buffer.alloc(0))), WANT);
 check('alg: none, bare trailing dot', outcome(`${b64({ alg: 'none', typ: 'JWT' })}.${b64(claims())}.`), WANT);
 check('alg: none, original signature kept', outcome(`${b64({ alg: 'none', typ: 'JWT' })}.${p}.${s}`), WANT);
@@ -102,7 +102,7 @@ check('typ missing', outcome(forge({ alg: 'HS256' }, claims())), WANT);
 check('typ wrong', outcome(forge({ alg: 'HS256', typ: 'JWT2' }, claims())), WANT);
 
 // ---------------------------------------------------------------------------
-console.log('\n== §10 — signature ==');
+console.log('\n== §10, signature ==');
 check('signed with the wrong secret', outcome(good, WRONG_SECRET), WANT);
 check('signature over a different message', outcome(`${h}.${p}.${hmac(`${h}.${p}.`).toString('base64url')}`), WANT);
 check('signature truncated', outcome(`${h}.${p}.${s.slice(0, 8)}`), WANT);
@@ -111,7 +111,7 @@ check('signature is not base64url', outcome(`${h}.${p}.!!!not-base64!!!`), WANT)
 check('payload swapped, old signature kept', outcome(`${h}.${b64(claims({ role: 'owner' }))}.${s}`), WANT);
 
 // ---------------------------------------------------------------------------
-console.log('\n== §10 / D7 — exp is half-open: exp == now is expired ==');
+console.log('\n== §10 / D7, exp is half-open: exp == now is expired ==');
 check('expired one second ago', outcome(signToken(claims({ exp: nowSec() - 1 }), SECRET)), WANT);
 check('exp exactly now', outcome(signToken(claims({ exp: nowSec() }), SECRET)), WANT);
 check('exp missing', outcome(signToken(claims({ exp: undefined }), SECRET)), WANT);
@@ -120,7 +120,7 @@ check('exp is null', outcome(signToken(claims({ exp: null }), SECRET)), WANT);
 check('exp still valid -> accepted', outcome(signToken(claims({ exp: nowSec() + 120 }), SECRET)), 'accepted');
 
 // ---------------------------------------------------------------------------
-console.log('\n== §10 — issuer, audience, jti ==');
+console.log('\n== §10, issuer, audience, jti ==');
 check('wrong iss', outcome(signToken(claims({ iss: 'evil' }), SECRET)), WANT);
 check('iss missing', outcome(signToken(claims({ iss: undefined }), SECRET)), WANT);
 check('wrong aud', outcome(signToken(claims({ aud: 'some-other-api' }), SECRET)), WANT);
@@ -129,9 +129,9 @@ check('jti missing', outcome(signToken(claims({ jti: undefined }), SECRET)), WAN
 check('jti empty', outcome(signToken(claims({ jti: '' }), SECRET)), WANT);
 
 // ---------------------------------------------------------------------------
-console.log('\n== §10 — a refresh token is not an access token ==');
+console.log('\n== §10, a refresh token is not an access token ==');
 check('opaque refresh token as bearer', outcome(randomBytes(32).toString('base64url')), WANT);
 check('refresh token with a dot in it', outcome(`${randomBytes(16).toString('base64url')}.${randomBytes(16).toString('base64url')}`), WANT);
 
-console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
+console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}, ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

@@ -50,10 +50,10 @@ export function Login({ onSignedIn, notice }) {
       <div className="gate__split">
       {/* The premise gets its own column because this is the one screen with room to say what the
           product actually is, and saying it is worth more than a logo. Three claims, each of which
-          is a thing the console genuinely does — not a tagline. */}
+          is a thing the console genuinely does, not a tagline. */}
       <section className="gate__premise">
         <p className="gate__eyebrow">RemoteOps</p>
-        <h1 className="gate__claim">Know who can do what — and why.</h1>
+        <h1 className="gate__claim">Know who can do what, and why.</h1>
         <ul className="gate__points">
           <li>Several organizations share this deployment. None of them can see each other, and a request for something that does not exist is answered as though it never did.</li>
           <li>Every power you see came from somewhere: your role, a grant someone made you, or a refusal someone made against you. The console shows which.</li>
@@ -118,7 +118,7 @@ export function Login({ onSignedIn, notice }) {
 /**
  * The invite page, at /invite/:token.
  *
- * `tests/ui.spec.js:308` requires that a bad token renders an error and leaks NOTHING — the page
+ * `tests/ui.spec.js:308` requires that a bad token renders an error and leaks NOTHING, the page
  * must not contain the string "Acme" or "org_acme". So this component renders only what the public
  * peek endpoint returned, and that endpoint deliberately returns the org's NAME and not its id
  * (BRIEF.md §5.1, and the assertion at `scripts/check-api.js:172`). There is no org switcher, no
@@ -179,8 +179,8 @@ export function AcceptInvite({ token }) {
   }
 
   if (done) {
-    // The sign-in form, not a "go to sign in" link. Accepting does NOT sign anyone in — there is no
-    // token issued by the accept route — so the honest next step is to sign in, and putting the form
+    // The sign-in form, not a "go to sign in" link. Accepting does NOT sign anyone in, there is no
+    // token issued by the accept route, so the honest next step is to sign in, and putting the form
     // here means the person is already standing on it. `tests/ui.spec.js:305` requires
     // `login-form` to be on the page at this point.
     //

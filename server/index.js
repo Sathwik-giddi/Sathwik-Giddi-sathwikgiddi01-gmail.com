@@ -24,7 +24,7 @@ const DIST = new URL('../dist/', import.meta.url).pathname;
 /**
  * libuv's threadpool width is the throughput lever for password hashing, and it CANNOT be set from
  * here. libuv captures `UV_THREADPOOL_SIZE` once, when the threadpool is first created, so
- * assigning `process.env` in this module body is silently ignored — measured 654ms for 64 sign-ins
+ * assigning `process.env` in this module body is silently ignored, measured 654ms for 64 sign-ins
  * with the assignment in place, against 616ms with the default. It looks like it works, which is
  * worse than not having it. `npm start` and `npm run dev` set it, where it is a real environment
  * variable of a real process; a bare `node server/index.js` gets libuv's default of 4.
@@ -37,7 +37,7 @@ const DIST = new URL('../dist/', import.meta.url).pathname;
  *
  * 1.3x, not the 2x the arithmetic predicts (2925ms of CPU over 4 workers would be ~730ms, over 8
  * ~366ms). Each derivation touches 16 MB, so past about six concurrent hashes the limit is memory
- * bandwidth rather than thread count — which is also why 16 is not obviously better than 8, and why
+ * bandwidth rather than thread count, which is also why 16 is not obviously better than 8, and why
  * a 64-core machine should not be handed a thread per core. 8 is the default in the scripts.
  */
 
@@ -49,7 +49,7 @@ const DIST = new URL('../dist/', import.meta.url).pathname;
  * the documented way to run the app signed every token with a literal that is published in the
  * source. scripts/pentest.js mints a token with it and reads the org's devices.
  *
- * A dev default is still useful — `npm run dev` should work with no setup — so the fallback
+ * A dev default is still useful, `npm run dev` should work with no setup, so the fallback
  * survives, but ONLY off the production path. In production a missing key is fatal at boot
  * rather than a warning, because a server that starts with a known signing key is worse than a
  * server that does not start: the first one looks healthy and fails open.
@@ -70,7 +70,7 @@ const SECRET = requireSecret('JWT_SECRET', 'dev-secret-change-me');
 
 // The pepper that password hashes are absorbed into. Required in production, and for the same
 // reason as the two above but with a sharper edge: without it, a stolen `password_hash` column is a
-// crackable column, and no amount of scrypt cost changes that — cost only buys time, and time is
+// crackable column, and no amount of scrypt cost changes that, cost only buys time, and time is
 // exactly what an offline attacker has. With it, the column alone is worthless. See server/auth.js.
 //
 // It is the one secret here whose loss is unrecoverable: losing the pepper does not lock anyone out
@@ -82,7 +82,7 @@ process.env.PASSWORD_PEPPER_ID = process.env.PASSWORD_PEPPER_ID ?? '1';
 
 // The same mistake one line away, and it was worth fixing while here. auth.js HMACs refresh and
 // invite tokens with APP_HASH_KEY before storing them, and its own comment says the key "is an
-// application secret, not a hardcoded literal" — while defaulting to exactly that. A known key
+// application secret, not a hardcoded literal", while defaulting to exactly that. A known key
 // does not make a 256-bit random token guessable, but it does make the stored hash reproducible
 // by anyone holding the database, which is the whole reason for storing a hash. Exported rather
 // than kept local because auth.js reads it back off process.env at module load.
@@ -99,7 +99,7 @@ const PUBLIC_ROUTES = new Set([
   'GET /v1/invites/:token',
   'POST /v1/invites/:token/accept',
   // The refresh cookie is the credential for signing out, so this must work with no bearer token.
-  // It was missing from this list while `web/api.js` called it with `{ auth: false }` — the route
+  // It was missing from this list while `web/api.js` called it with `{ auth: false }`, the route
   // 401'd, the console swallowed it in a bare `catch {}`, and a reload silently signed the person
   // back in. The control existed, was called, and did nothing.
   'POST /v1/auth/logout',
@@ -150,7 +150,7 @@ async function serveStatic(req, res, url) {
   // normalize() collapses '..' so a crafted path cannot escape dist/.
   //
   // The decode is guarded because `decodeURIComponent` THROWS `URIError` on a malformed
-  // percent-escape — `GET /%ff` is enough — and this function is called straight from the request
+  // percent-escape, `GET /%ff` is enough, and this function is called straight from the request
   // listener with nothing in between. Unguarded, that throw was an uncaught exception and it took
   // the whole process down: one unauthenticated request, no valid route needed, and `npm start`
   // has no supervisor to bring it back. Verified before the fix: after a single `GET /%ff` the
@@ -223,11 +223,11 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 //
 // Everything above this line is inside a try/catch, and that is where a failure belongs: a request
 // gets a response and the process carries on. This handler exists for the class of bug where
-// something throws on a path nobody guarded — the `decodeURIComponent` one above was found by
+// something throws on a path nobody guarded, the `decodeURIComponent` one above was found by
 // sending `GET /%ff` and watching the process disappear.
 //
-// It logs loudly and keeps serving, deliberately. The alternative — an uncaught exception
-// terminating the process — means one malformed request takes down a server whose whole job is
+// It logs loudly and keeps serving, deliberately. The alternative, an uncaught exception
+// terminating the process, means one malformed request takes down a server whose whole job is
 // answering requests, and `npm start` has no supervisor. Nothing here mutates state: SQLite is
 // synchronous, so a throw inside a handler cannot leave a transaction half-applied.
 // ---------------------------------------------------------------------------

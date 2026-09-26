@@ -6,7 +6,7 @@
 // Two traps worth naming, because both are in the code below rather than only in this comment:
 //
 //   - `roles.rank` is MODIFICATION AUTHORITY ONLY. It must never answer a can() question.
-//     operator and auditor are unordered by permission — `roles.rank` says operator(30) is
+//     operator and auditor are unordered by permission, `roles.rank` says operator(30) is
 //     above auditor(20), and Sam's two orgs prove that number is meaningless for permissions.
 //     Nothing in this file is reachable from the resolution engine, and nothing in
 //     permissions.js imports this file. That separation is the defence.
@@ -60,7 +60,7 @@ export function assertRoleExists(db, role) {
  *   - equal target, and the caller is an owner: allowed, because an org needs to be able to
  *     demote one of its owners, and owners are peers by definition
  *
- * Everything else — a peer that is not an owner, or anyone above the caller — is 403. Written
+ * Everything else, a peer that is not an owner, or anyone above the caller, is 403. Written
  * up in DECISIONS.md, since it is the one place I had to reconcile a table against a test.
  */
 export function assertCanModify(db, callerRole, targetRole) {
@@ -113,7 +113,7 @@ export function assertNotLastOwner(db, orgId, userId) {
  * Every filter is NULL-tolerant, INCLUDING `orgId`, and that is not a stylistic choice. A device
  * transfer calls this with only a `deviceId`, because the sessions to end may be in either org
  * (the device is moving between them). An earlier version guarded `userId` and `deviceId` with
- * `? IS NULL OR col = ?` but wrote `org_id = ?` unguarded — so with no org it compared
+ * `? IS NULL OR col = ?` but wrote `org_id = ?` unguarded, so with no org it compared
  * `org_id = NULL`, which is never true, and the transfer cascade silently updated ZERO rows while
  * the transfer itself returned 200. Found by `scripts/check-http-seams.js`, which asserts that a
  * live session on a transferred device actually ends. A cascade that does nothing is worse than no
@@ -138,7 +138,7 @@ export function endActiveSessions(db, { orgId = null, userId = null, deviceId = 
  * TTL expiry, applied lazily. `sessions.expires_at` is NOT NULL and every session carries one,
  * which is what stops "never terminated by a permission change" from becoming "never terminated".
  * Rather than a timer, every read and every write that looks at sessions first retires the ones
- * whose TTL has passed. The alternative — a background sweeper — is a second writer racing the
+ * whose TTL has passed. The alternative, a background sweeper, is a second writer racing the
  * request path for no benefit, since a session past its TTL has no authority left to protect.
  */
 export function expireStaleSessions(db, { orgId = null } = {}) {

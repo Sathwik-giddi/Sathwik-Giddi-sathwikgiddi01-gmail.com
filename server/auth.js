@@ -72,12 +72,12 @@ const B64URL = /^[A-Za-z0-9_-]+$/;
 
 function reject(detail) {
   const err = unauthenticated('invalid access token');
-  err.detail = detail; // server-side only — sendError does not serialise it
+  err.detail = detail; // server-side only, sendError does not serialise it
   return err;
 }
 
 // Returns { ok, value, why }. A segment is only usable if it is base64url, decodes to UTF-8,
-// parses as JSON, and is a JSON OBJECT — `null`, an array, a number and a bare string are all
+// parses as JSON, and is a JSON OBJECT, `null`, an array, a number and a bare string are all
 // refused, because every field read below assumes an object.
 function decodeSegment(segment) {
   if (!B64URL.test(segment)) return { ok: false, why: `${segment.length}-char segment is not base64url` };
@@ -107,7 +107,7 @@ const isNonEmptyString = (v) => typeof v === 'string' && v.length > 0;
 
 export function verifyAccessToken(token, secret) {
   // 1. shape. Covers null, undefined, '', an opaque refresh token, and a refresh token that
-  //    happens to contain a dot — none of them are three segments.
+  //    happens to contain a dot, none of them are three segments.
   if (!isNonEmptyString(token)) throw reject('token is not a non-empty string');
   const parts = token.split('.');
   if (parts.length !== 3) throw reject(`${parts.length} segments, expected 3`);
@@ -167,13 +167,13 @@ export function assertFresh(claims, membership) {
 
 // --- opaque credentials: refresh tokens and invite tokens -------------------
 //
-// Both are bearer credentials that live in a database, so both are stored hashed —
+// Both are bearer credentials that live in a database, so both are stored hashed,
 // never plaintext, and never reversible. But they are DIFFERENT credentials, so they
 // get DIFFERENT hash domains: sharing one would let a value from one table be compared
 // against the other, which is a pointless and avoidable correlation.
 //
 // The key is an application secret, not a hardcoded literal. A hardcoded key means the
-// hash is brute-forceable offline by anyone who reads this file — which defeats the
+// hash is brute-forceable offline by anyone who reads this file, which defeats the
 // point of hashing a high-entropy token.
 
 export const newRefreshToken = () => randomBytes(32).toString('base64url');
@@ -192,7 +192,7 @@ export const hashInviteToken = (raw) =>
 // ASYNC, and that is a security property rather than a style choice.
 //
 // These used to be `scryptSync`. On a single-threaded event loop a synchronous KDF does not just
-// slow the caller down — it stops the entire server, because nothing else can run until it returns.
+// slow the caller down, it stops the entire server, because nothing else can run until it returns.
 // Measured on this codebase: 1 concurrent sign-in stalled the loop ~41ms, and 64 stalled it for
 // 2641ms, because every hash after the first queued behind the one in progress. The work is
 // deliberately expensive, so "make it slower" is exactly the wrong response to a slow login: the
@@ -255,7 +255,7 @@ const scrypt = promisify(scryptCallback);
 // This is the answer to "can it be cheaper AND stronger at the same time", and for this part the
 // answer is yes, with no new dependency and no measurable cost.
 //
-// The reasoning: a KDF's cost is only ever buying ONE thing — making an OFFLINE attack on a stolen
+// The reasoning: a KDF's cost is only ever buying ONE thing, making an OFFLINE attack on a stolen
 // `password_hash` column expensive. It does nothing about an attacker who has the column and
 // nothing else, it just makes them wait. So the cost is being spent on the wrong threat, and paying
 // more of it is linearly more expensive for the defender too. There is no setting of N that makes
@@ -287,7 +287,7 @@ const PEPPER_PREVIOUS = process.env.PASSWORD_PEPPER_PREVIOUS ?? '';
  * The first version read `PASSWORD_PEPPER_ID` from the environment with a default of `'1'`, which
  * is a trap with no warning: change `PASSWORD_PEPPER` and leave the id alone and every stored hash
  * now references a pepper id that resolves to a DIFFERENT secret, so every login fails and it looks
- * exactly like everyone forgot their password. It was found by measurement — a database seeded
+ * exactly like everyone forgot their password. It was found by measurement, a database seeded
  * without the pepper and then served with one answered 401 to a correct password.
  *
  * Deriving the id from the value removes the possibility of the two disagreeing. An explicit
@@ -300,7 +300,7 @@ if (process.env.PASSWORD_PEPPER_ID && !PEPPER) {
   // Naming a pepper that is not there produces the same silence as forgetting it: hashes are written
   // with an id that can never be resolved. Better to say so once, at load, than to lock everybody
   // out and leave it to be diagnosed from 401s.
-  console.error('[auth] PASSWORD_PEPPER_ID is set but PASSWORD_PEPPER is empty — hashes will be written with an id no pepper can satisfy.');
+  console.error('[auth] PASSWORD_PEPPER_ID is set but PASSWORD_PEPPER is empty, hashes will be written with an id no pepper can satisfy.');
 }
 const PEPPER_PREVIOUS_ID = process.env.PASSWORD_PEPPER_PREVIOUS_ID ?? pepperId(PEPPER_PREVIOUS);
 
@@ -336,7 +336,7 @@ export async function hashPassword(password) {
   //
   // With no pepper configured there is no id to record, and the six-part form is written instead.
   // Interpolating a null id would put the literal string "null" in the field, which
-  // `verifyPassword` then reads back as a real-but-unknown id and refuses — so a pepperless process
+  // `verifyPassword` then reads back as a real-but-unknown id and refuses, so a pepperless process
   // would write hashes it could never verify. It wrote them, and failed to log anyone in, until
   // check-hardening.js exercised the code path with no pepper in the environment.
   if (!PEPPER_ID) return `scrypt$${N}$${r}$${p}$${salt}$${derived.toString('hex')}`;
@@ -393,7 +393,7 @@ export async function verifyPassword(password, stored) {
  * "Differs", not "is weaker", and that direction matters in both directions. Hardening is the
  * obvious case: an install whose hashes predate a cost increase should quietly upgrade itself rather
  * than needing a migration. But the same three lines have to cover a DEGRADE, or `SCRYPT_N` would
- * only ever affect new accounts and lowering it on a live database would appear to do nothing — the
+ * only ever affect new accounts and lowering it on a live database would appear to do nothing, the
  * most confusing possible behaviour for a latency knob, since the login screen would not get faster
  * and the config would look ignored.
  *

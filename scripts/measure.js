@@ -7,7 +7,7 @@
 //
 //   QUERIES  counted in-process, by wrapping better-sqlite3's Statement methods BEFORE the server
 //            modules are imported, then invoking the real route handlers with fake req/res. This
-//            counts EXECUTED statements, not prepared ones — the statement registry compiles each
+//            counts EXECUTED statements, not prepared ones, the statement registry compiles each
 //            query once per connection, so counting `prepare` would undercount every endpoint by
 //            the number of distinct queries it uses.
 //
@@ -148,7 +148,7 @@ for (const [label, run] of scenarios) {
   console.log(`  ${flag}${String(r.queries).padStart(3)}\x1b[0m  ${String(r.status).padStart(3)}  ${label}`);
 }
 
-console.log('\n\x1b[1mWHERE THE QUERIES GO\x1b[0m — the device list, which is the one the brief singles out\n');
+console.log('\n\x1b[1mWHERE THE QUERIES GO\x1b[0m, the device list, which is the one the brief singles out\n');
 {
   const detail = results[1][1].detail;
   for (const [sql, n] of [...detail].sort((a, b) => b[1] - a[1])) {

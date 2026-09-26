@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 // ############################################################################
 // # These four pragmas are NOT optional and are NOT a one-time setup step.    #
 // # foreign_keys is OFF by default in SQLite and is PER-CONNECTION.           #
-// # Without it the schema loads fine and enforces nothing — including the FK  #
+// # Without it the schema loads fine and enforces nothing, including the FK  #
 // # that rejects unknown permission strings (PERMISSIONS.md D19).             #
 // ############################################################################
 export function openDatabase(file = process.env.DATABASE_FILE ?? 'app.db') {
@@ -28,7 +28,7 @@ export function newId(prefix) {
 
 // A tiny helper so every write that touches authorization can bump the version in
 // the same breath. Permission changes take effect on the NEXT request (PERMISSIONS.md
-// §7.4) — the version is how the server notices.
+// §7.4), the version is how the server notices.
 export function bumpPermVersion(db, { orgId, userId }) {
   db.prepare(
     `UPDATE memberships SET perm_version = perm_version + 1

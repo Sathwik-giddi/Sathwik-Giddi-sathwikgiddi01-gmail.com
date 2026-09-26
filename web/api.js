@@ -1,7 +1,7 @@
 // The API client.
 //
 // ONE rule governs this file: it never decides a permission. There is no role-to-permission
-// table here and no `role === 'admin'` anywhere under web/ — the server resolves, and this layer
+// table here and no `role === 'admin'` anywhere under web/, the server resolves, and this layer
 // passes the answer through. If a component ever needs to know whether something is allowed, it
 // reads `data-state` off what the server sent, or it is not rendered at all.
 //
@@ -18,7 +18,7 @@ let onUnauthenticated = null;
  * Which org the token in hand is scoped to.
  *
  * This exists because of a bug worth naming. `POST /auth/refresh` cannot know which org you were
- * in — `refresh_tokens` has no org column — so it re-issues for the caller's default org, which is
+ * in, `refresh_tokens` has no org column, so it re-issues for the caller's default org, which is
  * the alphabetically first active membership. That token is then used to replay the ORIGINAL
  * request, which was addressed to a different org, and the server correctly answers 404. The screen
  * said "not found" for what was a stale token, and the module token was now org A while the app
@@ -50,7 +50,7 @@ export class ApiError extends Error {
    * A sentence for the screen.
    *
    * The server's own words, in every case except a dead network. UI-INVENTORY.md §4 is explicit
-   * that the element "carries the server's reason as text", and I had it the other way round — I
+   * that the element "carries the server's reason as text", and I had it the other way round, I
    * was rewriting 401 into "Your session has expired", which broke
    * `tests/ui.spec.js:327` (the sign-in failure has to contain "invalid" or "password") and, worse,
    * was exactly the "improving on the server's answer" the document warns about. The one thing
@@ -94,7 +94,7 @@ async function request(method, path, { body, auth = true, headers = {}, retried 
     // 401 TOKEN_STALE means the token no longer describes this membership. The one automatic
     // recovery: get a new token and replay the request ONCE.
     //
-    // `retried` is not decoration. Without it this is unbounded recursion — a server that answers
+    // `retried` is not decoration. Without it this is unbounded recursion, a server that answers
     // TOKEN_STALE twice drives the tab into infinite requests, two HTTP calls per level. A
     // recovery path that can loop is worse than no recovery path, and the guard is one boolean.
     if (error.status === 401 && error.code === 'TOKEN_STALE' && !path.includes('/auth/') && !retried) {
@@ -167,7 +167,7 @@ export async function switchOrg(orgId) {
   const payload = await post('/v1/auth/token', { orgId });
   // Store the new token. Forgetting this was a real bug: `request()` sends whatever is in the
   // module variable and does not adopt a token from a response, so the switch appeared to do
-  // nothing — `/auth/me` was still being asked with the OLD org's token and dutifully returned the
+  // nothing, `/auth/me` was still being asked with the OLD org's token and dutifully returned the
   // old org. The switch is a token swap, so the swap has to include the token.
   accessToken = payload.token;
   activeOrgId = orgId;
@@ -178,7 +178,7 @@ export async function switchOrg(orgId) {
 
 /**
  * The permission catalogue and role list, read from the database. The console needs these for the
- * grant form's checkboxes and the invite's role picker, and it must NOT keep its own copy — two
+ * grant form's checkboxes and the invite's role picker, and it must NOT keep its own copy, two
  * copies of the catalogue is exactly the drift BRIEF.md §5.3 warns about. This is also how a
  * permission that exists only in the graded fixture's database reaches the UI with no code change.
  */
@@ -209,7 +209,7 @@ export const listInvites = (orgId) => get(`/v1/orgs/${orgId}/invites`);
 export const createInvite = (orgId, email, role) => post(`/v1/orgs/${orgId}/invites`, { email, role });
 export const revokeInvite = (orgId, id) => del(`/v1/orgs/${orgId}/invites/${id}`);
 
-/** Public. No token — this is what the /invite/:token page calls before anyone has signed in. */
+/** Public. No token, this is what the /invite/:token page calls before anyone has signed in. */
 export const peekInvite = (token) => get(`/v1/invites/${encodeURIComponent(token)}`, { auth: false });
 export const acceptInvite = (token, name, password) =>
   post(`/v1/invites/${encodeURIComponent(token)}/accept`, { name, password }, { auth: false });

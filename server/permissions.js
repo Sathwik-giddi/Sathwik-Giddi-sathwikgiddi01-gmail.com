@@ -1,7 +1,7 @@
 // The permission resolution engine. THE ONLY PLACE allow-vs-deny is decided.
 //
-// If you ever find yourself writing `if (role === 'admin')` outside this file — and especially
-// under web/ — that is the bug this module exists to prevent. The console renders what this
+// If you ever find yourself writing `if (role === 'admin')` outside this file, and especially
+// under web/, that is the bug this module exists to prevent. The console renders what this
 // returns; it must never re-derive it.
 //
 // Everything is read from the tables at call time: the catalogue, the role baselines, the
@@ -42,7 +42,7 @@ const IMPLICIT = 'implicit';
  *
  * `permission_patterns` is the catalogue plus the wildcards, so a grant may hold `device:*` or
  * `*`. Matching is on the resource prefix, which is what makes `user:*` cover `user:role:update`
- * — a two-segment action — and not just the single-segment ones.
+ *, a two-segment action, and not just the single-segment ones.
  */
 function patternCovers(pattern, permission) {
   if (pattern === permission) return true;
@@ -79,7 +79,7 @@ export function createResolver(db, { userId, orgId, now = new Date() }) {
 
   // A membership only confers authority while it is `active`. `suspended` is reversible (D16) and
   // is reported distinctly because the console has to be able to say why. `invited` has not
-  // joined yet and `removed` is gone (D15) — for both, the caller is simply not a member, and
+  // joined yet and `removed` is gone (D15), for both, the caller is simply not a member, and
   // inventing a third word for it would only give the console something to say that is not true.
   const isActive = membership !== null && membership.status === 'active';
   const role = membership?.role ?? null;
@@ -167,7 +167,7 @@ export function createResolver(db, { userId, orgId, now = new Date() }) {
     const scopedAllows = deviceId === null ? null : allowByDevice.get(deviceId);
 
     for (const key of catalogue) {
-      // 3. deny wins. Org-wide first, then — device-level only — a deny scoped to this device.
+      // 3. deny wins. Org-wide first, then, device-level only, a deny scoped to this device.
       //    A device-scoped deny is deliberately NOT promoted to the org-level question, because
       //    "not the lobby kiosk" is not a statement about the org. (DECISIONS.md)
       const deniedBy = denyOrgWide.get(key) ?? (scopedDenies ? scopedDenies.get(key) : undefined);
@@ -282,7 +282,7 @@ function assertPermissionHeld(permissions, permission, deviceId) {
 
 /**
  * D9's second half: you may not grant authority you do not hold, at the scope you are granting
- * it. A caller who is blocked by an org-wide deny therefore cannot pass that permission on —
+ * it. A caller who is blocked by an org-wide deny therefore cannot pass that permission on,
  * which is the point: the deny cannot be laundered through a second grant.
  *
  * Patterns are expanded against the catalogue, so granting `device:*` is checked against all
@@ -303,7 +303,7 @@ function assertMayGrantHeld(decide, patterns, deviceId) {
       // I first wrote a `scope_mismatch` branch here, for the case "you hold this org-wide but
       // not on this device". My own test proved it unreachable: an org-wide allow is collected at
       // every device scope (see `decide`), so the ONLY way to hold a permission org-wide and not
-      // on a device is a device-scoped deny — which is the explicit_deny case. PERMISSIONS.md §5
+      // on a device is a device-scoped deny, which is the explicit_deny case. PERMISSIONS.md §5
       // lists `scope_mismatch` as a reason code; under §3's algorithm it cannot occur. Written
       // up in DECISIONS.md rather than left in as decoration.
       const denied = verdict?.reason === EXPLICIT_DENY;
@@ -326,7 +326,7 @@ function assertMayGrantHeld(decide, patterns, deviceId) {
  * different problems, and the caller has to be able to tell them apart.
  *
  * Returns the `authorized_by` snapshot the session row carries. The grant ids are the ones that
- * actually decided the two permissions, not every grant the user has — otherwise the snapshot
+ * actually decided the two permissions, not every grant the user has, otherwise the snapshot
  * would not be evidence of why this session was allowed.
  */
 function assertSessionStartable(decide, mode, role, deviceId) {

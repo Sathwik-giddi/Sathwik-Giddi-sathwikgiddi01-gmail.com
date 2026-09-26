@@ -1,12 +1,12 @@
-// Seam tests at the HTTP layer — the cases the shipped suites do not reach over a real socket.
+// Seam tests at the HTTP layer, the cases the shipped suites do not reach over a real socket.
 //
 //   node scripts/check-http-seams.js
 //
 // The organiser README names the hidden tier's targets: "offboard/rehire, self-transfer,
 // suspension on ungated routes, malformed-token fuzzing, cross-scope laundering, concurrent
 // inserts against the partial unique index". `check-seams.js` covers the first, second and fifth
-// against the engine directly, and `check-jwt.js` the fourth. This file covers what is left — the
-// ones that only exist once a request goes through the pipeline — and adds the concurrency cases
+// against the engine directly, and `check-jwt.js` the fourth. This file covers what is left, the
+// ones that only exist once a request goes through the pipeline, and adds the concurrency cases
 // with genuinely parallel requests, which is the only honest way to test a race.
 //
 // Every org, user and device used here is created by the test. Nothing reads the published
@@ -50,13 +50,13 @@ async function call(method, path, { token, body, headers = {} } = {}) {
 }
 
 // Returns null for ANY failure, including a missing token on a 200. Two of my checks were
-// `x !== null`, which is TRUE for `undefined` — so a sign-in that returned no token at all read as
+// `x !== null`, which is TRUE for `undefined`, so a sign-in that returned no token at all read as
 // a pass and the real failure surfaced four lines later as a missing Authorization header.
 /**
  * A request to an ABSOLUTE path. `call()` above is relative to /v1, which is right for the API and
  * wrong for the two things this file also needs to exercise: the SPA fallback in `serveStatic`, and
  * proving the process is still alive. Writing '/%ff' through `call()` would have produced
- * '/v1/%ff', which the router 404s before reaching the code under test — a test that passes because
+ * '/v1/%ff', which the router 404s before reaching the code under test, a test that passes because
  * it tested the wrong thing, which is the failure mode this file exists to catch.
  */
 async function raw(method, path, { token, headers = {} } = {}) {
@@ -229,7 +229,7 @@ console.log('\n== suspension, including on routes with no permission gate of the
   check('  ...with reason suspended', gated.reason, 'suspended');
 
   const ungated = await call('GET', '/orgs', { token: helperA });
-  check('and 403 on the ungated route too — the gate is the token, not the endpoint', ungated.status, 403);
+  check('and 403 on the ungated route too, the gate is the token, not the endpoint', ungated.status, 403);
 
   // And they cannot sign in again.
   const relogin = await call('POST', '/auth/login', { body: { email: 'helper@example.test', password: 'password123' } });
@@ -259,7 +259,7 @@ console.log('\n== offboard and rehire, end to end ==');
   const removed = await call('DELETE', `/orgs/${A}/members/${helperRow.user_id}`, { token: A_TOKEN });
   check('removed from the org', removed.status, 200);
   check('their token stops working immediately', (await call('GET', `/orgs/${A}/devices`, { token: helperA })).status, 401);
-  check('the user row survives — users are never deleted (D15)', (await call('POST', '/auth/login', { body: { email: 'helper@example.test', password: 'password123' } })).status, 401);
+  check('the user row survives, users are never deleted (D15)', (await call('POST', '/auth/login', { body: { email: 'helper@example.test', password: 'password123' } })).status, 401);
 
   // Re-invite and accept. Two things to prove: that a removed member CAN be invited back (the
   // membership row still exists, so this is the branch that was broken), and that the old grants
@@ -268,7 +268,7 @@ console.log('\n== offboard and rehire, end to end ==');
   check('a removed member can be invited back', again.status, 201);
 
   // They cannot sign in: login requires an active membership, and theirs was just removed. So the
-  // redeem has to work for someone in exactly that state — by proving the existing password.
+  // redeem has to work for someone in exactly that state, by proving the existing password.
   check('a memberless account cannot sign in at all', (await call('POST', '/auth/login', { body: { email: 'helper@example.test', password: 'password123' } })).status, 401);
 
   const wrong = await call('POST', `/invites/${again.body.inviteToken}/accept`, { body: { name: 'Helper', password: 'not-the-password' } });
@@ -296,7 +296,7 @@ console.log('\n== offboard and rehire, end to end ==');
 console.log('\n== D9 cross-scope laundering, over HTTP ==');
 {
   // The caller has to HOLD grant:create for this to be a laundering test rather than a plain
-  // permission test, so the subject is an `admin` — which has grant:create and lacks org:delete.
+  // permission test, so the subject is an `admin`, which has grant:create and lacks org:delete.
   const inv = await call('POST', `/orgs/${A}/invites`, { token: A_TOKEN, body: { email: 'launderer@example.test', role: 'admin' } });
   await call('POST', `/invites/${inv.body.inviteToken}/accept`, { body: { name: 'Launderer', password: 'password123' } });
   const members = await call('GET', `/orgs/${A}/members`, { token: A_TOKEN });
@@ -305,7 +305,7 @@ console.log('\n== D9 cross-scope laundering, over HTTP ==');
   check('a second member exists to be the target of the grant', victim?.role, 'operator');
 
   // Take a permission away from them, org-wide. The token is minted AFTER this, because creating a
-  // grant bumps the grantee's perm_version and an earlier token would be stale — which is the
+  // grant bumps the grantee's perm_version and an earlier token would be stale, which is the
   // freshness mechanism working, and worth being explicit about rather than working around.
   const deny = await call('POST', `/orgs/${A}/grants`, {
     token: A_TOKEN, body: { userId: launderer.user_id, effect: 'deny', permissions: ['device:file_transfer'] },
@@ -331,7 +331,7 @@ console.log('\n== D9 cross-scope laundering, over HTTP ==');
     check(`  ...and ${label} is refused too`, attempt.status, 403);
   }
 
-  // A permission they DO hold can be granted — otherwise the rule would be useless.
+  // A permission they DO hold can be granted, otherwise the rule would be useless.
   const fine = await call('POST', `/orgs/${A}/grants`, {
     token: adminToken, body: { userId: victim.user_id, effect: 'allow', permissions: ['device:view'] },
   });
@@ -358,7 +358,7 @@ console.log('\n== grandfathering, end to end, through a real revocation ==');
 
   // Signed in BEFORE the grant, on purpose. `login` always mints a token carrying the CURRENT
   // perm_version, so the only way to hold a stale one is to take it first and then have somebody
-  // change your authority — which is exactly the situation under test.
+  // change your authority, which is exactly the situation under test.
   const early = await login('gandalf@example.test', 'password123');
   check('gandalf signed in before any grant exists', typeof early === 'string', true);
 
@@ -377,7 +377,7 @@ console.log('\n== grandfathering, end to end, through a real revocation ==');
   });
   check('granted session:start + device:control on one device', grant.status, 201);
 
-  // The grant bumped gandalf's perm_version, so `early` is now stale — and `POST /auth/token` runs
+  // The grant bumped gandalf's perm_version, so `early` is now stale, and `POST /auth/token` runs
   // through the same freshness gate as every other authenticated route, so it will not mint a new
   // scope from it. The console recovers by refreshing and retrying; here we simply sign in again.
   const earlySwitch = await call('POST', '/auth/token', { token: early, body: { orgId: A } });
@@ -397,7 +397,7 @@ console.log('\n== grandfathering, end to end, through a real revocation ==');
   // Revoke it. The live session must survive; the next one must not be possible.
   await call('DELETE', `/orgs/${A}/grants/${grant.body.id}`, { token: A_TOKEN });
 
-  // The revocation also bumped gandalf's perm_version, so gA is stale — which is the freshness
+  // The revocation also bumped gandalf's perm_version, so gA is stale, which is the freshness
   // mechanism, and is why the observation below needs a token minted AFTER the change. The shipped
   // suite avoids this by asking as a third party (the owner, whose own pv did not move).
   const staleNow = await call('GET', `/sessions/${opened.body.id}`, { token: gA });
@@ -412,7 +412,7 @@ console.log('\n== grandfathering, end to end, through a real revocation ==');
   check('  ...with no end_reason, because permission changes never end sessions', stillThere.body.end_reason, null);
   check('  ...and its snapshot still names the grant it was opened under', stillThere.body.authorized_by?.grantIds, [grant.body.id]);
 
-  // And with the new truth in force, a NEW session is refused — 403, naming what is missing.
+  // And with the new truth in force, a NEW session is refused, 403, naming what is missing.
   const blocked = await call('POST', `/orgs/${A}/sessions`, { token: gA2, body: { deviceId: dA, mode: 'control' } });
   check('a NEW session on the same device is 403, not 401', blocked.status, 403);
   check('  ...and it says which of the two permissions is missing', blocked.reason, 'missing_permission');
@@ -438,7 +438,7 @@ console.log('\n== a session past its TTL is retired on read ==');
   check('a session opens', opened.status, 201);
   check('  ...carrying an expiry', typeof opened.body.expires_at, 'string');
 
-  // Wind the clock past the TTL by rewriting the stored expiry — the only way to test this
+  // Wind the clock past the TTL by rewriting the stored expiry, the only way to test this
   // without waiting an hour, and it is the same row the lazy sweep reads.
   const raw = new Database(DB);
   raw.pragma('foreign_keys = ON');
@@ -567,12 +567,12 @@ console.log('\n== malformed input must never be a 500, and never a dead process 
   const t = await login('owner@acme.test');
 
   // Sanity: the raw helper is really reaching the server. Every assertion in this block writes
-  // '/%ff' and other non-/v1 paths, and `call()` is relative to /v1 — so without this the block
+  // '/%ff' and other non-/v1 paths, and `call()` is relative to /v1, so without this the block
   // would be testing '/v1/%ff', which the router 404s before reaching the code under test.
   //
   // The status is deliberately not asserted as 200: a non-/v1 path is served from dist/, and a
   // clean checkout has no dist/ until something builds it. What matters is that the request
-  // ARRIVES — a network error would mean the helper, not the app, was broken.
+  // ARRIVES, a network error would mean the helper, not the app, was broken.
   const spa = await raw('GET', '/');
   check('the raw helper reaches the server (non-/v1 paths included)', spa.status > 0, true);
 
@@ -581,7 +581,7 @@ console.log('\n== malformed input must never be a 500, and never a dead process 
   const killed = await raw('GET', '/%ff');
   check('a malformed percent-escape is a 400, not a crash', [killed.status, killed.code], [400, 'VALIDATION']);
 
-  // 2. And the server is still there afterwards — the assertion that actually pins the bug.
+  // 2. And the server is still there afterwards, the assertion that actually pins the bug.
   const alive = await call('GET', '/auth/me', { token: t });
   check('  ...and the server is still serving', alive.status, 200);
 
@@ -640,7 +640,7 @@ console.log('\n== the refresh lineage, and sign-out, must have CONSEQUENCES ==')
 
   const rotC = await fetch(`${BASE}/auth/refresh`, { method: 'POST', headers: { cookie: B } });
   const C = cookieOf(rotC.headers.get('set-cookie'));
-  check('B rotates into C — C is the live, unspent tip', [rotC.status, C !== B], [200, true]);
+  check('B rotates into C, C is the live, unspent tip', [rotC.status, C !== B], [200, true]);
 
   check('replaying a spent ancestor is refused', (await call('POST', '/auth/refresh', { headers: { cookie: A } })).status, 401);
 
@@ -814,6 +814,6 @@ console.log('\n== two information leaks, both one field away from correct code =
   check('transfer to its own org is still 400 same_org', [ownOrg.status, ownOrg.reason], [400, 'same_org']);
 }
 
-console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
+console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}, ${pass} passed, ${fail} failed\n`);
 shutDown();
 process.exit(fail === 0 ? 0 : 1);

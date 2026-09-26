@@ -72,7 +72,7 @@ function report(userId, orgId, label) {
     console.log(`    ${YELLOW}explicitly denied org-wide:${OFF} ${explicit.map((p) => `${RED}${p}${OFF} ${DIM}(${orgLevel[p].source})${OFF}`).join('  ')}`);
   }
 
-  console.log(`\n  ${DIM}per device — the rows the console renders${OFF}`);
+  console.log(`\n  ${DIM}per device, the rows the console renders${OFF}`);
   const header = ['device', 'device:view', 'device:control', 'device:terminal', 'session:start'];
   const w = [22, 13, 16, 16, 14];
   console.log(`    ${DIM}${header.map((h, i) => pad(h, w[i])).join('')}${OFF}`);
@@ -100,10 +100,10 @@ console.log(`\n${BOLD}${'='.repeat(78)}${OFF}`);
 console.log(`${BOLD}THE FIXTURE STORY${OFF}`);
 console.log(`${BOLD}${'='.repeat(78)}${OFF}`);
 
-report('usr_sam', 'org_acme', '1. Sam in Acme — operator, with an ORG-WIDE deny on device:terminal');
-report('usr_sam', 'org_globex', '2. Sam in Globex — auditor. Same person, the two locked items swap (D2)');
-report('usr_dana', 'org_globex', '3. Dana in Globex — viewer, plus a grant on exactly ONE device (D6)');
-report('usr_acme_viewer', 'org_acme', '4. Acme viewer — a grant, a deny, and a row that disappears');
+report('usr_sam', 'org_acme', '1. Sam in Acme, operator, with an ORG-WIDE deny on device:terminal');
+report('usr_sam', 'org_globex', '2. Sam in Globex, auditor. Same person, the two locked items swap (D2)');
+report('usr_dana', 'org_globex', '3. Dana in Globex, viewer, plus a grant on exactly ONE device (D6)');
+report('usr_acme_viewer', 'org_acme', '4. Acme viewer, a grant, a deny, and a row that disappears');
 
 // ---------------------------------------------------------------------------
 const overlay = buildOverlay(readNonce());
@@ -111,7 +111,7 @@ if (overlay) {
   console.log(`\n${BOLD}${'='.repeat(78)}${OFF}`);
   console.log(`${BOLD}THE PERSONALISED ORGANISATION${OFF}  ${DIM}fingerprint ${overlay.fingerprint}${OFF}`);
   console.log(`${BOLD}${'='.repeat(78)}${OFF}`);
-  report(overlay.user.id, overlay.org.id, `5. ${overlay.org.name} — role "${overlay.role.key}", which no document mentions`);
+  report(overlay.user.id, overlay.org.id, `5. ${overlay.org.name}, role "${overlay.role.key}", which no document mentions`);
   report(overlay.bystander.id, overlay.org.id, `6. A plain viewer in the same brand-new org`);
 
   const r = createResolver(db, { userId: overlay.user.id, orgId: overlay.org.id });

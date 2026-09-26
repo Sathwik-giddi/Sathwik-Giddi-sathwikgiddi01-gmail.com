@@ -7,7 +7,7 @@
 // printed below will not help.
 //
 // It builds a throwaway in-memory database (schema + reference + overlay), exactly like
-// scripts/check-permissions.js does — your app.db is not touched.
+// scripts/check-permissions.js does, your app.db is not touched.
 
 import { readFileSync } from 'node:fs';
 import { openDatabase } from '../server/db.js';
@@ -28,7 +28,7 @@ db.exec(readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8'));
 db.exec(readFileSync(new URL('../db/reference.sql', import.meta.url), 'utf8'));
 // Awaited: `applyOverlay` is async because it hashes a password on the threadpool before opening
 // its transaction. Un-awaited it returned a promise and every assertion below ran against a
-// database the overlay had not been written to yet — which failed in a way that looked like four
+// database the overlay had not been written to yet, which failed in a way that looked like four
 // unrelated permission bugs.
 await applyOverlay(db, overlay, { passwordHash: () => 'x' });
 
@@ -89,6 +89,6 @@ check('viewer allows are exactly the documented four', viewerAllows, ['device:li
 check('viewer does not get the new permission', bystander.permissions[e.permission].effect, 'deny');
 check('  ...and the reason is implicit, not suspended or denied', bystander.permissions[e.permission].reason, 'implicit');
 
-console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed`);
+console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}, ${pass} passed, ${fail} failed`);
 console.log('Grading uses a different nonce. Read the tables at runtime; never hardcode.\n');
 process.exit(fail === 0 ? 0 : 1);

@@ -3,7 +3,7 @@
 //   node scripts/check-hardening.js
 //
 // The shipped suites are the happy path. This one is the list of things that are true REGARDLESS
-// of what anyone built — invariants transcribed from `PERMISSIONS.md §9` ("Things that should
+// of what anyone built, invariants transcribed from `PERMISSIONS.md §9` ("Things that should
 // always be true") and from the seams the task's own README names: offboard/rehire, self-transfer,
 // suspension on ungated routes, malformed-token fuzzing, cross-scope laundering, and concurrent
 // inserts against the partial unique indexes.
@@ -107,7 +107,7 @@ console.log('\n== §9.1 a deny beats an allow, whatever the scope or specificity
   check('a device-scoped allow of a denied permission is created', carve.status, 201);
 
   // Sam's token is minted AFTER the grant on purpose. Creating a grant bumps the grantee's
-  // perm_version, so a token taken beforehand is stale by design — which is the freshness mechanism
+  // perm_version, so a token taken beforehand is stale by design, which is the freshness mechanism
   // working, and is the fifth time this phase that a test failed because it authenticated before
   // the write it was testing.
   const sam = await into('sam@example.test', 'org_acme');
@@ -195,7 +195,7 @@ console.log('\n== §9.5 an org always has at least one owner ==');
   check('the sole owner cannot leave', (await call('DELETE', `/orgs/${S}/members/me`, { token: ownerS })).code, 'LAST_OWNER');
   check('the sole owner cannot be suspended', (await call('POST', `/orgs/${S}/members/${me.user.id}/suspend`, { token: ownerS })).code, 'SELF_ROLE_CHANGE');
 
-  // With two owners, one CAN go — the last-owner guard is about the LAST one, not about owners.
+  // With two owners, one CAN go, the last-owner guard is about the LAST one, not about owners.
   const inv = await call('POST', `/orgs/${S}/invites`, { token: ownerS, body: { email: 'second@example.test', role: 'owner' } });
   await call('POST', `/invites/${inv.body.inviteToken}/accept`, { body: { name: 'Second', password: 'password123' } });
   check('a second owner joins', (await call('GET', `/orgs/${S}/members`, { token: ownerS })).body.members.filter((m) => m.role === 'owner').length, 2);
@@ -209,7 +209,7 @@ console.log('\n== §9.5 an org always has at least one owner ==');
   check('  ...exactly one, and it is the remaining owner', afterLeave.filter((m) => m.role === 'owner' && m.status === 'active')[0].user_id, me.user.id);
 
   // Now they are the last owner again, and the guard is back. My first version asserted a 200 here
-  // — it demoted the FIRST owner and then expected the SECOND (now the only one) to be able to
+  //, it demoted the FIRST owner and then expected the SECOND (now the only one) to be able to
   // leave, which the guard correctly refused with 409. The behaviour was right and the test was
   // walking the org into the state it was meant to be checking.
   check('the last owner may not leave', (await call('DELETE', `/orgs/${S}/members/me`, { token: ownerS })).code, 'LAST_OWNER');
@@ -323,7 +323,7 @@ console.log('\n== §9.8/§9.10 audit is append-only, and the model lives in one 
 
   // §9.10: one engine. If a second copy of the matrix existed anywhere it would drift, and the
   // cheapest evidence is that a role's baseline READ STRAIGHT FROM THE FILE is exactly the answer
-  // the API gives — read independently, so this is a cross-check and not the server agreeing with
+  // the API gives, read independently, so this is a cross-check and not the server agreeing with
   // itself. Seeded denies are subtracted explicitly and called out, rather than swept away.
   // Expected = (baseline OR any live allow grant) MINUS any live deny grant, all read from the
   // file. This is a DATA comparison, not a second implementation of the resolution algorithm: the
@@ -363,7 +363,7 @@ function readBaseline(role) {
  * The live, in-window ALLOW and DENY permissions for a user, read straight from the file.
  *
  * Deliberately not scope-aware. The org-level answer is a union across devices, so a device-scoped
- * allow counts towards it (that is decision 1 in DECISIONS.md) — and a device-scoped DENY does not,
+ * allow counts towards it (that is decision 1 in DECISIONS.md), and a device-scoped DENY does not,
  * which is why only the deny side here is org-wide by construction. Keeping this a set read rather
  * than a resolution means the check cannot become a second engine.
  */
@@ -507,8 +507,8 @@ console.log('\n== every 400 carries a machine-readable reason ==');
 //
 // The `role` claim is an authorization INPUT (AUTH-DATA-MODEL.md §1 D11) and must never be an
 // authority. `authenticate()` used to set `ctx.role = claims.role`, which meant anyone who could
-// sign a token — a leaked key, a committed .env, or `npm start` signing with the published
-// default `dev-secret-change-me` — could put `role:"owner"` in a token and promote a viewer to
+// sign a token, a leaked key, a committed .env, or `npm start` signing with the published
+// default `dev-secret-change-me`, could put `role:"owner"` in a token and promote a viewer to
 // owner, because lifecycle.js ranks `ctx.role`. Reproduced over HTTP: a forged admin token
 // returned 200 and `{"role":"owner","perm_version":2}` where the honest one got 403.
 console.log('\n== a forged role claim must not outrank the membership row ==');
@@ -517,7 +517,7 @@ console.log('\n== a forged role claim must not outrank the membership row ==');
   const asAdmin = await call('GET', '/orgs/org_acme/devices', { token: admin });
   // Read sub/org/pv off a real token rather than hardcoding them. An earlier version of this block
   // hardcoded `sub: 'ln'`, which is not a user, so every forged token was refused at the
-  // membership lookup and the block passed against the vulnerable code — a green test that
+  // membership lookup and the block passed against the vulnerable code, a green test that
   // proved nothing, which is the exact failure this file's header warns about.
   const realClaims = JSON.parse(Buffer.from(admin.split('.')[1], 'base64url').toString());
   const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -575,7 +575,7 @@ console.log('\n== every response carries a security header set ==');
   // The header NAME matters and is not cosmetic: `X-Content-Security-Policy` was a draft no browser
   // implemented, so a policy sent under it is inert while looking correct in a header dump. The
   // first version of server/headers.js used the prefixed name and this is the assertion that caught
-  // it — a CSP that was present, unrecognised, and protecting nothing.
+  // it, a CSP that was present, unrecognised, and protecting nothing.
   check('Content-Security-Policy, not the inert X- prefixed draft', csp.length > 0, true);
   check("default-src 'self'", /default-src 'self'/.test(csp), true);
   check("object-src 'none'", /object-src 'none'/.test(csp), true);
@@ -617,8 +617,8 @@ console.log('\n== an unauthenticated endpoint cannot be used as a lever ==');
   check('the 429 advertises Retry-After', throttled.retryAfter !== null && Number(throttled.retryAfter) > 0, true);
   check('the 429 says nothing about whether the account exists', throttled.message, 'too many attempts; try again shortly');
 
-  // The property that makes this design usable at all, and the reason the shipped suite — which
-  // signs in around fifty times — still passes: throttling is per credential, and a correct
+  // The property that makes this design usable at all, and the reason the shipped suite, which
+  // signs in around fifty times, still passes: throttling is per credential, and a correct
   // password is never counted.
   const unaffected = await call('POST', '/auth/login', { body: { email: 'sam@example.test', password: 'demo1234' } });
   check('a different credential is unaffected', unaffected.status, 200);
@@ -665,7 +665,7 @@ console.log('\n== the KDF cost travels inside the hash, so it can be changed saf
   // is the only moment the plaintext exists to add a pepper to a hash written without one.
   //
   // These are produced by a child process with NO pepper in its environment, because they cannot be
-  // forged by rearranging the fields of a peppered hash — `scrypt(password)` and
+  // forged by rearranging the fields of a peppered hash, `scrypt(password)` and
   // `scrypt(HMAC(pepper, password))` derive different bytes from the same salt, so a "legacy" hash
   // built by string surgery off a peppered one verifies against nothing. The first version of this
   // block did exactly that and reported two honest hashes as broken.
@@ -703,7 +703,7 @@ console.log('\n== the KDF cost travels inside the hash, so it can be changed saf
   // use, which is exactly the situation rehash-on-login exists to resolve.
   //
   // Nothing here asserts anything about the fixture. An earlier version read the "before" cost out
-  // of the seeded database, which is an assertion about test ORDER — several blocks above already
+  // of the seeded database, which is an assertion about test ORDER, several blocks above already
   // sign in as dana, so the rehash had fired and the precondition was already false.
   const target = 'sam@example.test';
   const cost = () => new Database(DB, { readonly: true })
@@ -724,6 +724,6 @@ console.log('\n== the KDF cost travels inside the hash, so it can be changed saf
   check('a settled row is not rewritten on every sign-in', cost(), settled);
 }
 
-console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
+console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}, ${pass} passed, ${fail} failed\n`);
 shutDown();
 process.exit(fail === 0 ? 0 : 1);

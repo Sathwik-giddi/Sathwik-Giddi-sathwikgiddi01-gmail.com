@@ -1,4 +1,4 @@
-// UI contract tests — presence semantics.
+// UI contract tests, presence semantics.
 //
 // Everything asserted here is on the documented data-* attributes, never on CSS selectors
 // or pixels. The rule under test: an element is PRESENT (rendered, data-state="unlocked")
@@ -48,7 +48,7 @@ test('switching orgs measurably changes the rendered appearance', async ({ page 
   await expect(page.getByTestId('active-role')).toHaveText('viewer');
 });
 
-// §5 of UI-INVENTORY.md — the nav shape itself is permission-driven. Owner sees all six
+// §5 of UI-INVENTORY.md, the nav shape itself is permission-driven. Owner sees all six
 // cards; the viewer sees three. That is "different permissions, different views" made
 // structural.
 test('owner sees all six cards', async ({ page }) => {
@@ -68,7 +68,7 @@ test('operator sees only Devices and Sessions', async ({ page }) => {
   }
 });
 
-test('auditor sees Devices, People, Grants, Sessions, Audit — no Admin', async ({ page }) => {
+test('auditor sees Devices, People, Grants, Sessions, Audit, no Admin', async ({ page }) => {
   await login(page, 'sam@example.test');
   await switchOrg(page, 'org_globex');      // auditor there
 
@@ -84,7 +84,7 @@ test('auditor sees Devices, People, Grants, Sessions, Audit — no Admin', async
   await expect(page.locator('[data-testid="grant-row"]').first()).toBeVisible();
 });
 
-// §3 Admin card — admin has the panel but NO delete. This is the one element that
+// §3 Admin card, admin has the panel but NO delete. This is the one element that
 // separates owner from admin, so it is exactly where a candidate slips.
 test('admin has the Admin card but no delete entry', async ({ page }) => {
   await login(page, 'admin@acme.test');
@@ -103,7 +103,7 @@ test('owner has both Admin entries', async ({ page }) => {
   await expect(page.getByTestId('delete-org')).toHaveCount(1);
 });
 
-// D2 — the auditor/operator pair. Across two orgs the same person's cards differ.
+// D2, the auditor/operator pair. Across two orgs the same person's cards differ.
 test('auditor and operator see different cards', async ({ page }) => {
   await login(page, 'sam@example.test');          // operator in Acme
   await expect(page.getByTestId('nav-people')).toHaveCount(0);
@@ -114,7 +114,7 @@ test('auditor and operator see different cards', async ({ page }) => {
   await expect(deviceRow(page, 'dev_globex_desk_01').locator('[data-permission="device:control"]')).toHaveCount(0);
 });
 
-// D6 — a device-scoped grant makes ONE control appear and none of the others.
+// D6, a device-scoped grant makes ONE control appear and none of the others.
 test('a device-scoped grant surfaces exactly one control', async ({ page }) => {
   await login(page, 'dana@example.test');
   await switchOrg(page, 'org_globex');
@@ -123,7 +123,7 @@ test('a device-scoped grant surfaces exactly one control', async ({ page }) => {
   await expect(deviceRow(page, 'dev_globex_kiosk_02').locator('[data-permission="device:control"]')).toHaveCount(0);
 });
 
-// §2 — a device the caller cannot view is not a redacted row; it is not listed.
+// §2, a device the caller cannot view is not a redacted row; it is not listed.
 test('a device the viewer cannot see is absent, not redacted', async ({ page }) => {
   await login(page, 'viewer@acme.test');
   await expect(page.locator('[data-testid="device-row"]')).toHaveCount(4);
@@ -134,7 +134,7 @@ test('a device the viewer cannot see is absent, not redacted', async ({ page }) 
 // THE ARCHITECTURE TEST.
 //
 // Make the SERVER say deny, and the element must DISAPPEAR. A hardcoded client-side role
-// matrix ignores the response and keeps rendering the button — which is exactly the bug
+// matrix ignores the response and keeps rendering the button, which is exactly the bug
 // this catches. It verifies where the decision is computed, not whether it happens to be right.
 test('an element vanishes when the server withdraws the permission', async ({ page }) => {
   await login(page, 'dana@example.test');   // owner: control is present everywhere
@@ -159,7 +159,7 @@ test('an element vanishes when the server withdraws the permission', async ({ pa
 
 // ---------------------------------------------------------------------------
 // Isolation, asserted on the rendered DOM rather than only on the API.
-// NOTE: the other org's ID legitimately appears in the org switcher — Dana is a member of
+// NOTE: the other org's ID legitimately appears in the org switcher, Dana is a member of
 // both. What must NOT appear is the other org's *content*.
 test('no other org\'s content appears anywhere in the DOM', async ({ page }) => {
   await login(page, 'dana@example.test');
@@ -197,7 +197,7 @@ test('two tabs on two orgs do not bleed', async ({ browser }) => {
   await b.close();
 });
 
-// D13 — the access token lives in memory. Nothing in web storage.
+// D13, the access token lives in memory. Nothing in web storage.
 test('no token is persisted in web storage', async ({ page }) => {
   await login(page, 'dana@example.test');
   const storage = await page.evaluate(() => ({
@@ -218,8 +218,8 @@ test('a reload restores the session from the refresh cookie', async ({ page }) =
 
 // ---------------------------------------------------------------------------
 // Deny-wins, now as presence: the operator's Terminal entry is absent everywhere, while
-// Control is untouched. (The explicit_deny REASON is asserted server-side — HIDDEN-BACKEND
-// C1/C4 — because an absent element cannot explain itself.)
+// Control is untouched. (The explicit_deny REASON is asserted server-side, HIDDEN-BACKEND
+// C1/C4, because an absent element cannot explain itself.)
 test('an org-wide deny removes the entry the baseline granted', async ({ page }) => {
   await login(page, 'sam@example.test');   // operator: terminal is in the baseline
   const row = deviceRow(page, 'dev_lab_win_01');
@@ -266,7 +266,7 @@ test('a grant created through the UI surfaces the item it grants', async ({ page
   await other.close();
 });
 
-// Creating organizations from the UI — a stated requirement.
+// Creating organizations from the UI, a stated requirement.
 test('a new org can be created from the UI and you become its owner', async ({ page }) => {
   await login(page, 'dana@example.test');
   const before = await shell(page).getAttribute('data-org-id');

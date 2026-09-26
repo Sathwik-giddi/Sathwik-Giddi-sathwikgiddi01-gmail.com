@@ -114,8 +114,8 @@ test.describe('contrast', () => {
   test('every organization theme passes AA on the device list', async ({ page }) => {
     await signIn(page, 'owner@acme.test');
 
-    // Setting `data-org-theme` is exactly what the app does when the org changes — the whole
-    // palette hangs off that one attribute — so this is the real mechanism, not a simulation of
+    // Setting `data-org-theme` is exactly what the app does when the org changes, the whole
+    // palette hangs off that one attribute, so this is the real mechanism, not a simulation of
     // it. An earlier version of this block fetched `/v1/reference` first "to be sure the themes
     // were real", which 401s without an Authorization header and failed the test for no reason
     // connected to contrast.
@@ -130,6 +130,34 @@ test.describe('contrast', () => {
     }
     const all = seen.flatMap((s) => s.bad.map((b) => ({ theme: s.theme, ...b })));
     expect(all, JSON.stringify(all, null, 1)).toEqual([]);
+  });
+
+  // Added after a real regression: the ACTIVE organization chip set `color: var(--accent)` on
+  // hover while its background was already `var(--accent)`, so hovering the current org made its
+  // own label vanish. Source order could not have fixed it, because `.orgchip:hover` is (0,2,0) and
+  // `.orgchip--on` is only (0,1,0), `:hover` is a class-level selector and outranks it. The only
+  // honest general guard is to hover everything and check the text is still legible.
+  test('no control becomes invisible on hover', async ({ page }) => {
+    await signIn(page, 'dana@example.test');
+    const controls = await page.locator('button, a[href], select, input[type=checkbox]').elementHandles();
+    expect(controls.length, 'expected some controls to hover').toBeGreaterThan(5);
+
+    const invisible = [];
+    for (const el of controls) {
+      if (!(await el.isVisible().catch(() => false))) continue;
+      const name = await el.evaluate((e) => e.getAttribute('data-testid') || e.className || e.tagName);
+      await el.hover({ timeout: 2000 }).catch(() => {});   // may be covered by something else
+      await page.waitForTimeout(40);
+      const bad = await el.evaluate((e) => {
+        // Only a solid, opaque background of its own can hide the text it sits on.
+        const cs = getComputedStyle(e);
+        const bg = cs.backgroundColor;
+        const opaque = bg && !/rgba?\([^)]*,\s*0\s*\)$/.test(bg) && bg !== 'transparent';
+        return opaque && cs.color === bg;
+      });
+      if (bad) invisible.push(name);
+    }
+    expect([...new Set(invisible)], `invisible on hover: ${[...new Set(invisible)].join(', ')}`).toEqual([]);
   });
 
   test('a focus ring is visible on every interactive control', async ({ page }) => {

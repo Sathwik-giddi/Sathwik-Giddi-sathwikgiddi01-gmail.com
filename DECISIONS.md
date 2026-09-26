@@ -5,7 +5,7 @@ the same four parts, and the third and fourth are the ones we weigh most.
 
 Rules, from `DISCOVERY-BRIEF.md`:
 
-- cite something real in `Why` — a commit, a test, an error string, a file and line
+- cite something real in `Why`, a commit, a test, an error string, a file and line
 - do not restate what a document says; describe what you did when the documents ran out
 - six to twelve decisions is the expected range
 
@@ -28,7 +28,7 @@ the console cannot render a card whose endpoint refuses. Promoting a device deny
 breaks that: Acme's viewer is denied `device:view` on the lobby kiosk and allowed it on four
 other machines, so org-level would report `deny` for a permission they demonstrably hold.
 
-**What I rejected:** the opposite asymmetry — a device-scoped deny wins org-wide too, which is
+**What I rejected:** the opposite asymmetry, a device-scoped deny wins org-wide too, which is
 D1 read maximally. It is the more "consistent looking" rule and it is wrong for the case above.
 I also rejected the reading where org-level ignores device-scoped grants entirely (only org-wide
 grants apply). It is simpler and it makes the Grants card vanish for someone who can read grants
@@ -38,7 +38,7 @@ permission a device-scoped grant names.
 **What would change my mind:** a case where a device-scoped grant is the *only* thing
 authorising an org-level action, and the intended product behaviour is that the action is
 refused. I could not construct one from the documents. I would also change it if the console ever
-needed an org-level answer to mean "on every device" — the union cannot answer that question, and
+needed an org-level answer to mean "on every device", the union cannot answer that question, and
 if that turned out to be the intent, the org-level set would have to become an intersection over
 denies, which is a different engine.
 
@@ -51,8 +51,8 @@ answer. `suspended` → `403 FORBIDDEN` with `reason: "suspended"`. `invited` an
 UNAUTHENTICATED`. Inside `resolve()`, `suspended` reports `reason: "suspended"` and both of the
 others report `reason: "not_a_member"`.
 
-**Why:** `AUTH-DATA-MODEL.md §10` states it outright — "a token for a suspended membership → 403
-with an empty permission set; for a `removed` membership → 401" — and it is also the only split
+**Why:** `AUTH-DATA-MODEL.md §10` states it outright, "a token for a suspended membership → 403
+with an empty permission set; for a `removed` membership → 401", and it is also the only split
 that carries information. Suspension is reversible (D16); removal is not (D15). Answering 401 for
 both would tell a suspended user their session expired, which sends them to a password reset that
 cannot help. `assertFresh` in the given `auth.js` already throws `unauthenticated('not a member
@@ -82,7 +82,7 @@ offending grant id.
 *elsewhere*, producing a `scope_mismatch` code. `scripts/check-seams.js` failed on it, and
 chasing the failure showed the branch was unreachable: an org-wide allow is collected at every
 device scope, so the only way to hold a permission org-wide and not on one device is a
-device-scoped deny — which is the `explicit_deny` case. I was maintaining a code path for a state
+device-scoped deny, which is the `explicit_deny` case. I was maintaining a code path for a state
 the engine cannot be in, and worse, the reachable path was reporting `missing_permission` when the
 real obstacle was a named grant. The person hitting this is an admin who needs to know which grant
 to revoke, so the answer has to carry it.
@@ -103,24 +103,24 @@ org-wide nor per-device, that state becomes reachable and the third code comes b
 and every live grant once, and `authenticate()` creates exactly one per request, handing it to the
 routes as `ctx.resolver`. It is discarded when the response is sent.
 
-**Why:** This is the answer to the question `BRIEF.md §6` and `WORKFLOW.md §3` both ask — "if you
+**Why:** This is the answer to the question `BRIEF.md §6` and `WORKFLOW.md §3` both ask, "if you
 cache, say why it can't serve stale authority". It can't, because it does not outlive the request
 that made it: there is no interval during which a revoked grant, a lapsed `expires_at` (D7), or a
 role change could be answered from a previous request's conclusion. Freshness *across* requests
 is `memberships.perm_version`, compared in `context.js` on every request. The payoff is not
-correctness alone — a device list is three queries regardless of how many devices the org has,
+correctness alone, a device list is three queries regardless of how many devices the org has,
 which is the "one query per row" failure `BRIEF.md §6` names. I measured the alternative: the
 same answers from a per-device query loop are 1 + N round trips for N devices.
 
 **What I rejected:** a process-wide `Map` keyed by `(userId, orgId)` with a short TTL. It is
 faster on a hot list endpoint and it is precisely the thing `AUTH-DATA-MODEL.md §3(2)` warns about
-by name — a TTL is a window in which a revocation is not yet true, so a 5-second TTL means a
+by name, a TTL is a window in which a revocation is not yet true, so a 5-second TTL means a
 revoked grant can authorise for up to 5 more seconds. The other candidate was invalidating on
 `perm_version` writes, which is sound but needs a write-side hook on every mutation that touches
 authority; missing one is silent and permanent rather than brief.
 
 **What would change my mind:** a measured latency problem on a list endpoint that the per-request
-resolver cannot fix — at which point the cache key has to include the membership's
+resolver cannot fix, at which point the cache key has to include the membership's
 `perm_version` and the resolution would have to be pinned to an instant rather than to "now", so
 that a cached answer states the version it was computed at. That is a bigger change than the
 problem would justify at this size.
@@ -130,7 +130,7 @@ problem would justify at this size.
 ### Re-hiring someone restores the grants they had before they left
 
 **What I chose:** nothing, deliberately. `grants` hang off `(org_id, user_id)`, so removing a
-membership does not touch them, and a re-invite brings the old grants — allows *and* denies —
+membership does not touch them, and a re-invite brings the old grants, allows *and* denies,
 back with the person. I built against that and wrote a test for it rather than working around it.
 
 **Why:** It falls out of where the schema hangs authority, and `db/schema.sql` is not mine to
@@ -140,17 +140,17 @@ both grants restored; re-hired as a *different* role → the baseline follows th
 the grants do not. The last case is the one that surprised me, and it is arguably wrong as a
 product: a former operator re-hired as a viewer keeps a `device:terminal` allow that a genuine
 operator would have needed. It is defensible as "grants are the org's record of what this person
-was given, and revoking them is a separate deliberate act" — an admin who wants them gone revokes
+was given, and revoking them is a separate deliberate act", an admin who wants them gone revokes
 them, and the revocation is auditable.
 
 **What I rejected:** deleting or revoking a removed member's grants on removal. It would be
 tidier, and it silently destroys the audit trail of what someone was authorised to do while they
-were here — which is the thing the audit log exists to answer. I also rejected leaving it
+were here, which is the thing the audit log exists to answer. I also rejected leaving it
 undocumented, which is the option that would have cost the most.
 
 **What would change my mind:** evidence that a re-hire is expected to start from a clean slate. If
-so the fix is not in the removal path but in the accept-invite path — revoke the previous
-membership's grants at re-hire, where the intent is explicit — and I would want the question
+so the fix is not in the removal path but in the accept-invite path, revoke the previous
+membership's grants at re-hire, where the intent is explicit, and I would want the question
 asked of the product owner rather than decided by me.
 
 ---
@@ -164,7 +164,7 @@ asked of the product owner rather than decided by me.
 **Why:** A 401 that says *which* check failed is an oracle: it tells someone attempting to forge a
 token that their signature was fine and their `exp` was not, which is a measurement of how close
 they got. I wanted the server log to be diagnosable, so I checked that `sendError`
-(`server/http.js:52`) copies only `status`, `code`, `message` and `reason` — the `detail` never
+(`server/http.js:52`) copies only `status`, `code`, `message` and `reason`, the `detail` never
 reaches the response. The property is asserted by the suite's own design: `check-jwt.js:47-53`
 collapses every outcome to a string and requires the exact value `401 UNAUTHENTICATED`, so a
 wrong error type is visible.
@@ -188,7 +188,7 @@ owner. You may also assign any role whose rank is not above your own. One compar
 user of equal role (admin → admin) → 403". Implemented literally, that also makes owner → owner a
 403, and `scripts/check-api.js:150` failed against it: one owner demoting another owner in a
 two-owner org, expecting 200. The two cannot both be right. Owners are peers by definition, and an
-org that cannot demote one of its owners has no mechanism to change its own ownership — the
+org that cannot demote one of its owners has no mechanism to change its own ownership, the
 last-owner guard would then be a dead end rather than a protection. `server/lifecycle.js:60-84`
 carries both clauses and the reasoning; the equal-rank allowance is scoped to `owner` and to nothing
 else, so admin → admin is still 403.
@@ -198,7 +198,7 @@ would have meant editing a test or shipping a known failure. I also rejected mak
 purely numeric ("you may modify anyone at or below your rank"), which is simpler and would let two
 admins modify each other.
 
-**What would change my mind:** evidence that peer-owner demotion is meant to be impossible — for
+**What would change my mind:** evidence that peer-owner demotion is meant to be impossible, for
 instance a product where the founder's ownership is permanent. Then the table is right, the test is
 wrong, and I would want that argument in writing rather than inferred from one assertion.
 
@@ -210,7 +210,7 @@ wrong, and I would want that argument in writing rather than inferred from one a
 org's device-scoped grants stay, inert, and revive if the device is ever transferred back.
 
 **Why:** `grants.org_id` is `NOT NULL` and resolution filters on it before anything else, so a
-grant in org A naming a device that has moved to org B is already unreachable — no question asked
+grant in org A naming a device that has moved to org B is already unreachable, no question asked
 in org A can name that device, so the grant cannot apply. Deleting them would be a write with no
 protective effect, taken at a moment (a transfer) when the operator is thinking about a machine and
 not about a grant history. Reviving them on return is also the more defensible reading: the org
@@ -218,7 +218,7 @@ granted that person access to *that machine*, and the machine came back. `server
 says so at the point of the decision.
 
 **What I rejected:** revoking the source org's grants on transfer, which is tidier and prevents a
-stale grant from surprising anyone later. It is also destructive and unlogged — there is no
+stale grant from surprising anyone later. It is also destructive and unlogged, there is no
 `grant:revoke` audit row for a grant nobody chose to revoke, so the trail would show a transfer and
 a silent disappearance.
 
@@ -233,7 +233,7 @@ transfer route should revoke them, in the same transaction, with an audit row ea
 **What I chose:** `POST /sessions` checks `session:start` and the mode permission, and nothing
 else. A device-scoped `allow device:control` works on a device where `device:view` is denied.
 
-**Why:** I built the opposite first — a 404 for invisible devices on the session route, on the
+**Why:** I built the opposite first, a 404 for invisible devices on the session route, on the
 reasoning that you should not operate a machine you cannot see. Then I read §5.1's table again,
 which gives this endpoint exactly two requirements and does not mention `device:view`; and §4, whose
 sentence about `device:view` is explicitly about *list responses*. The stronger argument is
@@ -246,7 +246,7 @@ which I still think is defensible on security grounds. It makes a documented gra
 documented case, and nothing in the documents asks for it.
 
 **What would change my mind:** a requirement that a caller may only act on resources they can see.
-If that is the intent, the fix belongs in one place — `assertCan` — rather than in each route, and
+If that is the intent, the fix belongs in one place, `assertCan`, rather than in each route, and
 it would make every device-scoped grant conditional on `device:view`, which I would then want to see
 stated somewhere.
 
@@ -258,17 +258,17 @@ stated somewhere.
 gate as every other authenticated route, so a stale token cannot mint a new scope. The only way
 past it is `POST /auth/refresh` from the httpOnly cookie.
 
-**Why:** I hit this while testing and my first instinct was that it was a bug — the user clicked
+**Why:** I hit this while testing and my first instinct was that it was a bug, the user clicked
 "switch org" and got a 401. It is not: `perm_version` moving is how the server knows authority
 changed, and minting a fresh token from a stale one would mean the freshness check could be
 side-stepped by switching orgs. Recovery being *one* mechanism matters more than it being
-convenient — two ways back is how one of them ends up unguarded. The console's `api.js` already
+convenient, two ways back is how one of them ends up unguarded. The console's `api.js` already
 handles it: on `TOKEN_STALE` it refreshes from the cookie and retries the original request once, so
 the switch lands in the org the person asked for.
 
 **What I rejected:** exempting `POST /auth/token` from the freshness check, which would have made
 the UX complaint go away. It would also mean a demoted user could still mint tokens for their other
-orgs, which happens to be defensible — and it would be a special case in the pipeline for a route
+orgs, which happens to be defensible, and it would be a special case in the pipeline for a route
 that is not special.
 
 **What would change my mind:** evidence that org-switching needs to work offline from freshness, for
@@ -279,14 +279,14 @@ exemption belongs on the route, with a comment saying exactly why that route is 
 
 ### An invite proves the invite; a password proves the person. Neither resets the other
 
-**What I chose:** accepting an invite has three paths — signed in and it is your account, signed out
+**What I chose:** accepting an invite has three paths, signed in and it is your account, signed out
 and the address is new (create the account), or signed out and the address is taken (**re-authenticate
 with the existing password**). No path ever changes an existing password.
 
 **Why:** `BRIEF.md §2` makes an invite the only way to add a person, and the accept route is public,
 so "the email already exists" has to be answered. The two obvious answers are both unacceptable: ask
 for a new password and you have built an unauthenticated password reset; create a second user and
-`users.email` refuses. The third case is forced by a fact I only noticed while writing the test — a
+`users.email` refuses. The third case is forced by a fact I only noticed while writing the test, a
 person removed from their only organization **cannot sign in at all**, because login requires an
 active membership (a token has to be scoped to an org), so the authenticated path is unreachable for
 precisely the person who most needs to redeem a re-invite. Re-authenticating against the stored
@@ -300,7 +300,7 @@ what I had. Also rejected: a password-reset token, which is out of scope per `st
 would be a larger feature than the problem.
 
 **What would change my mind:** a requirement that redeeming an invite never requires typing an
-existing password anywhere. Then the answer is not in this route — it is a magic link scoped to the
+existing password anywhere. Then the answer is not in this route, it is a magic link scoped to the
 invite, which is a different product and a bigger build.
 
 ### Duplicate org name is an application check, because the schema cannot make it a guarantee
@@ -308,7 +308,7 @@ invite, which is a different product and a bigger build.
 **What I chose:** `POST /v1/orgs` refuses a name that already exists (case-insensitively) with
 `409 CONFLICT` and `reason: "duplicate_name"`, checked in application code.
 
-**Why:** `PERMISSIONS.md §5` has a table row for it — `CONFLICT | 409 | duplicate name` — and **no
+**Why:** `PERMISSIONS.md §5` has a table row for it, `CONFLICT | 409 | duplicate name`, and **no
 submission could produce it**, because `organizations.name` carries no UNIQUE index. The only unique
 indexes in `db/schema.sql` are `roles.rank`, `users.email`, `invites.token_hash`,
 `memberships(org_id, user_id)` and the two partial ones. `BRIEF.md §2` says the schema wins, so a
@@ -321,7 +321,7 @@ now walks that table row by row and asserts every documented code is reachable.
 
 It is built as `new HttpError(409, 'CONFLICT', …, 'duplicate_name')` and not through
 `conflict(msg, code)`, because that helper's second argument is the **code** and it leaves `reason`
-null — so the obvious call puts `duplicate_name` where the specification says `CONFLICT` belongs and
+null, so the obvious call puts `duplicate_name` where the specification says `CONFLICT` belongs and
 leaves the specific cause unreported. Same split as `GRANT_EXPIRED`/`expired_grant`.
 
 **What I rejected:** emitting nothing, which follows `BRIEF.md §2` most literally. It leaves a
@@ -332,7 +332,7 @@ deliver it.
 guarantee and make the application check redundant. `db/schema.sql` is not mine to change, so until
 it is, the check-then-act race is real: two simultaneous creates with the same name can both
 succeed. The consequence is a cosmetic duplicate, which is the only reason I am comfortable shipping
-a check-then-act in a build that otherwise refuses to use one — and it is stated in the code comment
+a check-then-act in a build that otherwise refuses to use one, and it is stated in the code comment
 rather than left to be discovered.
 
 ---
@@ -346,14 +346,14 @@ property. Sign-in answers one message for a wrong password and for an account th
 **Why:** A 401 that says *which* check failed is an oracle: it tells someone forging a token that
 their signature was fine and their `exp` was not, which is a measurement of how close they got. But I
 wanted the server log to be diagnosable, so I checked rather than assumed that `sendError`
-(`server/http.js:52`) copies only `status`, `code`, `message` and `reason` — `detail` never reaches
+(`server/http.js:52`) copies only `status`, `code`, `message` and `reason`, `detail` never reaches
 the response. `check-jwt.js:47-53` collapses every outcome to a string and demands the exact value
 `401 UNAUTHENTICATED`, so a wrong error type is visible rather than tolerated.
 
 The sign-in half is the same principle applied to accounts: `UI-INVENTORY.md §4` says a wrong
 password and an unknown account must read identically, because a screen that says "no such account"
 is an enumeration oracle. `tests/ui.spec.js:333` asserts the screen does not improve on the server's
-answer, and I had it the other way round — `ApiError.human` rewrote every 401 into "Your session has
+answer, and I had it the other way round, `ApiError.human` rewrote every 401 into "Your session has
 expired", which both failed that test and did the thing the document forbids.
 
 **What I rejected:** a distinct message per failure mode, which is what I would write for a CLI where
@@ -368,8 +368,8 @@ obscurity.
 **What I chose:** `ctx.role` is `membership.role`, read from the database, and a token whose `role`
 claim disagrees with the row is rejected with 401 rather than corrected.
 
-**Why:** I read D11 — "the token carries the authorization *inputs*, the server resolves the
-permissions" — as being about payload size. Resolve permissions per request; do not bake the set
+**Why:** I read D11, "the token carries the authorization *inputs*, the server resolves the
+permissions", as being about payload size. Resolve permissions per request; do not bake the set
 into the token. So the resolver read the database, and `ctx.role` came from `claims.role`.
 `server/lifecycle.js` then ranks `ctx.role` in `assertRoleAssignable` and `assertCanModify`, which
 made the token's `role` field load-bearing after all.
@@ -382,8 +382,8 @@ forged -> PATCH /v1/orgs/org_acme/members/usr_acme_viewer {"role":"owner"} -> 20
           {"user_id":"usr_acme_viewer","role":"owner","perm_version":2}
 ```
 
-An admin promoted a viewer to owner, in the database, in the audit log. Every other control held —
-the endpoint, the rank table, the last-owner guard — because all of them trusted the wrong input.
+An admin promoted a viewer to owner, in the database, in the audit log. Every other control held,
+the endpoint, the rank table, the last-owner guard, because all of them trusted the wrong input.
 
 The part worth keeping is *why* a mismatch is an error instead of a silent correction. By the time
 `authenticate()` reaches the check, `assertFresh` has already proved the token's `perm_version`
@@ -393,13 +393,13 @@ token was forged; there is no legitimate state in which they differ, so tolerati
 tolerating an attack.
 
 **What I rejected:** trusting the claim and letting the resolver catch up, which is what the code
-did. Also rejecting the whole token as a `TOKEN_STALE` — the credential is not stale, it is
+did. Also rejecting the whole token as a `TOKEN_STALE`, the credential is not stale, it is
 inauthentic, and conflating the two would send a legitimate client into a refresh loop that cannot
 fix anything.
 
 **What would change my mind:** a deployment where the membership row is genuinely unavailable on the
 request path. Then the claim would have to stand in for it, and the honest answer would be a signed
-short-lived assertion that is re-validated against the database before any *write* — not before
+short-lived assertion that is re-validated against the database before any *write*, not before
 every read.
 
 The general rule: **a claim is a cache of something the server already knows. If acting on the claim
@@ -408,7 +408,7 @@ is cheaper than reading the source of truth, the claim will eventually be acted 
 ### A dev default is fine; a dev default reachable in production is not
 
 **What I chose:** `JWT_SECRET` and `APP_HASH_KEY` keep their development literals, and a missing key
-in production is fatal at boot — the error message carries the command that generates one.
+in production is fatal at boot, the error message carries the command that generates one.
 
 **Why:** both were `process.env.X ?? '<literal>'`, and both fallbacks were reachable in production,
 because the hand-out's own `npm start` sets `NODE_ENV=production` and sets neither. The documented
@@ -443,7 +443,7 @@ output reads like an argument rather than a report; folding it in would mean the
 assertions" could only be quoted with a footnote about 9 of them being an attacker.
 
 The reason this is a decision at all: I wrote the nine regression assertions, watched them pass, and
-they were **passing against the vulnerable code**. Two reasons, both unrelated to the bug — a
+they were **passing against the vulnerable code**. Two reasons, both unrelated to the bug, a
 hardcoded `sub: 'ln'` that is not a user, so every token died at the membership lookup, and a
 missing `jti`, so every token died again at the verifier. Two layers of a test that could not fail.
 
@@ -462,7 +462,7 @@ Four places. Two are document-versus-document, two are document-versus-schema.
 
 ### 1. `PERMISSIONS.md §5` lists a reason code that §3's algorithm cannot produce
 
-> §5: "`reason` is the machine-readable cause — `missing_permission`, `explicit_deny`,
+> §5: "`reason` is the machine-readable cause, `missing_permission`, `explicit_deny`,
 > `suspended`, `expired_grant`, `scope_mismatch`."
 
 But §3's step 3 says to collect "the grants that apply to this question **right now**", and D7
@@ -473,7 +473,7 @@ permission. `scope_mismatch` has the same problem, and I found it the hard way: 
 is collected at every device scope, so holding a permission org-wide but not on one device
 requires a device-scoped deny, which is `explicit_deny` (`DECISIONS.md`, decision 3).
 
-**Built against §3**, and both codes are absent from a *resolved permission* — which is where I
+**Built against §3**, and both codes are absent from a *resolved permission*, which is where I
 originally read the list as applying, and where it cannot apply.
 
 I also got the second half of this wrong and said so in a draft of this file: I wrote that
@@ -485,8 +485,8 @@ intent rather than the code. It now emits the documented string, and the test as
 POST /grants { expiresAt: <past> }  ->  400 GRANT_EXPIRED, reason 'expired_grant'
 ```
 
-`GRANT_EXPIRED` is named twice by `PERMISSIONS.md §5` — once in the code table and once in the
-prose list of reasons — and the two want different fields. So the code is `GRANT_EXPIRED` and the
+`GRANT_EXPIRED` is named twice by `PERMISSIONS.md §5`, once in the code table and once in the
+prose list of reasons, and the two want different fields. So the code is `GRANT_EXPIRED` and the
 reason is `expired_grant`. `scope_mismatch` has no such second life and remains unreachable.
 
 ### 2. `AUTH-DATA-MODEL.md §10` wants 403 for a suspended token, and "an empty permission set" in the same breath
@@ -511,7 +511,7 @@ against a suspended membership, so both halves are separately checked.
 permission to `permission_patterns` too so its own grants satisfy the foreign key. The comment is
 only true when there is no nonce.
 
-**Built against the tables, obviously** — but the comment is a trap for anyone who treats it as
+**Built against the tables, obviously**, but the comment is a trap for anyone who treats it as
 a contract, which is why it is in this file rather than only in `BUILD-LOG.md`. Nothing in my code
 may assume a permission count, and `check-personalisation.js` is the thing that enforces it.
 
@@ -527,7 +527,7 @@ chose a shipped assertion over a shipped document.
 
 ### 5. `UI-INVENTORY.md §3` bundles grant *visibility* into `user:read`, which reads oddly and is deliberate
 
-> `UI-INVENTORY.md §3`: "The Grants card shares its gate with People because the API does —
+> `UI-INVENTORY.md §3`: "The Grants card shares its gate with People because the API does,
 > `GET /grants` requires `user:read`. There is no `grant:read` permission."
 
 This one is not a contradiction so much as a design that looks like a mistake until you read it
@@ -535,7 +535,7 @@ twice, and I got it wrong first: my instinct was that the Grants card was gated 
 typo and should be `grant:create`. It is not a typo, and the consequence is the point.
 
 So the ability to *see* who holds what is bundled with the ability to see the people list, and an
-auditor — who cannot otherwise manage anyone — can read every grant in the organization, including
+auditor, who cannot otherwise manage anyone, can read every grant in the organization, including
 grants aimed at people whose details they cannot see. **Built against it**, because the catalogue is
 reference data and adding a permission is not mine to do. Logged as an open thread rather than
 worked around.
@@ -543,7 +543,7 @@ worked around.
 ### 6. `PERMISSIONS.md §5` documents a `CONFLICT / duplicate name` that the schema cannot enforce
 
 The code table says `CONFLICT | 409 | duplicate name`, and `db/schema.sql:81-88` gives
-`organizations.name` no UNIQUE index — so no implementation can produce that status from a
+`organizations.name` no UNIQUE index, so no implementation can produce that status from a
 guarantee, and `BRIEF.md §2` says the schema wins. **Built against the table**, with the race stated
 in the code and written up as decision 12 above, because a documented code nothing can emit is a
 code that misinforms. This is the only place in the build where I use check-then-act.
@@ -553,17 +553,17 @@ code that misinforms. This is the only place in the build where I use check-then
 The table says `GRANT_EXPIRED | 400 | creating a grant that is already expired`; the paragraph
 below says `reason` is one of `… `expired_grant` …`. So the two want different fields for the same
 error. I originally emitted `GRANT_EXPIRED` as the code and invented `invalid_window` for the
-reason — a word in none of the five documents — and then wrote a `DECISIONS.md` paragraph claiming
+reason, a word in none of the five documents, and then wrote a `DECISIONS.md` paragraph claiming
 the invented one was deliberate. **Built against both**: code `GRANT_EXPIRED`, reason `expired_grant`,
 asserted.
 
 ### 8. `README.md` says the first suite "fails until you implement `verifyAccessToken`"; `check-permissions.js` cannot report a failure at all
 
 > `starter/README.md:37-39`: "`check-jwt.js` fails until you implement `verifyAccessToken` in
-> `server/auth.js` — that function is a stub. `check-api.js` and the UI suite fail with it."
+> `server/auth.js`, that function is a stub. `check-api.js` and the UI suite fail with it."
 
 True, and incomplete in a way that cost me time. `check-permissions.js` does not *fail* on the
-skeleton — it **dies during import**, before its assertion harness exists, because `resolve` is
+skeleton, it **dies during import**, before its assertion harness exists, because `resolve` is
 called from a module-scope helper (`check-permissions.js:48`). The output is a stack trace, not
 "0 passed, 35 failed". So there are three distinct states of "not implemented", and only one of
 them is a test failure.
@@ -581,14 +581,14 @@ counter. Limits are 5 failures per 60s and 300 attempts per address per minute, 
 
 **Why:** the obvious implementation is wrong here for a measured reason. The shipped suites sign in
 about fifty times from 127.0.0.1, so any per-IP ceiling low enough to matter breaks `npm run check`;
-and any ceiling that does not break them — several hundred a minute — stops nothing, because one
+and any ceiling that does not break them, several hundred a minute, stops nothing, because one
 login costs about 40ms of scrypt and 300 of them is twelve seconds of threadpool time.
 
 Counting failures is both the correct security property and the reason the test suite still passes.
 A person who types their password correctly is never throttled however often they sign in.
 Credential stuffing fails every time, so it is the thing that gets slowed.
 
-**What I rejected:** a global per-IP request cap, as above. Also a lockout that persists — an
+**What I rejected:** a global per-IP request cap, as above. Also a lockout that persists, an
 attacker who learns five wrong passwords for a victim can lock that account out indefinitely, which
 converts a rate limiter into a denial-of-service tool pointed at a third party. The window slides
 and a success clears it, so the worst outcome is a slow attacker, not a permanently unavailable
@@ -612,12 +612,12 @@ CSP is environment-dependent: production gets `script-src 'self'; style-src 'sel
 and no eval; only dev gets `'unsafe-inline'`, for Vite's inline module preamble.
 
 **Why:** it went through three wrong versions before that, and the reason each was wrong is the
-point. First, `X-Content-Security-Policy` — an abandoned draft no browser implements, so the policy
+point. First, `X-Content-Security-Policy`, an abandoned draft no browser implements, so the policy
 was inert while every other header was present and all 34 UI tests passed. Second,
 `script-src 'self' 'unsafe-inline'`, added for the dev client: `'unsafe-inline'` permits inline
 script, which is the one thing a CSP exists to stop, and a browser test that injects an inline
 script found it **executing**. Third, a policy assembled from bare source expressions that read
-`… font-src 'self'; 'self'; 'self'; connect-src 'self'` — two nameless directives Chrome discards,
+`… font-src 'self'; 'self'; 'self'; connect-src 'self'`, two nameless directives Chrome discards,
 with blocking accidentally working via the `default-src` fallback.
 
 **What I rejected:** one policy for both environments. The permissive form has to exist for Vite, and
@@ -640,7 +640,7 @@ action or a `targetType` mismatch. The audit asserts the table and the routes ag
 directions, from source.
 
 **Why:** a dead-code sweep found `AUDITED_ACTIONS` declared, frozen, and documented as *"stated once,
-because the alternative is deciding per route and drifting"* — read by nothing. Every route passed
+because the alternative is deciding per route and drifting"*, read by nothing. Every route passed
 its own `targetType` inline, so the table could disagree with every caller indefinitely and nothing
 would notice. A table that is not consulted cannot prevent drift; it can only record it, and this one
 was not even recording correctly.
@@ -651,12 +651,12 @@ that `audit.js`'s own header comment was wrong: it said "reads are not audited",
 audited on refusal, because a refusal is an authorization event like any other. Successes are not
 audited; refusals are. The comment now says exactly that.
 
-**What I rejected:** deleting the table as dead code. It was the better-kept artefact — the intent was
-right and only the wiring was missing — and deleting it would have discarded the one place that knew
+**What I rejected:** deleting the table as dead code. It was the better-kept artefact, the intent was
+right and only the wiring was missing, and deleting it would have discarded the one place that knew
 which actions exist.
 
-**What would change my mind:** if the action set were genuinely open-ended — a caller-supplied action
-name, say — a fixed table would be the wrong shape. Nothing here is.
+**What would change my mind:** if the action set were genuinely open-ended, a caller-supplied action
+name, say, a fixed table would be the wrong shape. Nothing here is.
 
 The check that came out of it is written to fail loudly on the *shape* of the problem: the audit
 scrapes every dotted literal in the route files rather than a regex shaped like `action: '…'`,
@@ -678,26 +678,26 @@ sign-in. A cost you cannot change without a data migration is not a parameter; i
 that happens to look like one.
 
 Carrying N in the hash makes the change safe in both directions, and rehash-on-login is what makes it
-*take effect* — without it, `SCRYPT_N` only affects new accounts, so lowering it on a live database
+*take effect*, without it, `SCRYPT_N` only affects new accounts, so lowering it on a live database
 does nothing and the login screen does not get faster while the config looks ignored. My own
 measurement harness fell into precisely that trap: three runs at three different N all returned
 35ms, because the harness had never forwarded the variable to the server.
 
 **What I rejected:** lowering the default. This is the part I would argue for. N=8192 is 2.75x
-cheaper to attack offline *and* 2.75x faster — the tradeoff is not linear and the two goals are the
+cheaper to attack offline *and* 2.75x faster, the tradeoff is not linear and the two goals are the
 same request, so there is no version of "make login fast" that is not also "make passwords weaker".
 These parameters decide what a stolen `password_hash` column costs to crack, which is a risk
 decision, and the risk belongs to whoever deploys it rather than to a login screen feeling slow.
 The knob is explicit; the default is not moved.
 
 **What would change my mind:** a deployment with a stated, written-down threat model in which the
-offline cost of the password column does not matter — a local demo, a fixture with published
+offline cost of the password column does not matter, a local demo, a fixture with published
 passwords, anything where the database is not the asset. Then `SCRYPT_N=4096` is simply correct and
 the default should follow. I would want that in writing rather than inferred from a latency
 complaint.
 
 `maxmem` is derived from `128 * N * r` rather than fixed, because Node silently clamps the cost when
-`maxmem` is short — and a clamped cost is indistinguishable from a change that did nothing, which is
+`maxmem` is short, and a clamped cost is indistinguishable from a change that did nothing, which is
 the same trap one level down.
 
 ### A pepper, because the KDF cost was being spent on the wrong threat
@@ -707,7 +707,7 @@ beside `JWT_SECRET` and `APP_HASH_KEY`, its id is stored in the hash, and the id
 pepper value rather than configured beside it.
 
 **Why:** asked whether sign-in could be cheaper and stronger at once, and the honest answer has two
-halves. The KDF cost is a straight line — `N=8192` is 2.75x cheaper to attack and 2.75x faster, so
+halves. The KDF cost is a straight line, `N=8192` is 2.75x cheaper to attack and 2.75x faster, so
 "make it fast" and "make it weak" are one request and nothing clever changes that. But a KDF cost buys
 exactly one thing: making an offline attack on a stolen `password_hash` column slow. It does nothing
 about an attacker holding the column and nothing else. So the money was going to the wrong threat,
@@ -721,16 +721,16 @@ kind rather than in degree.
 
 **What I rejected:** deriving the pepper id from the environment with a default of `'1'`, which is what
 I wrote first. Change the pepper and leave the id and every hash now points at an id that resolves to a
-different secret — total lockout, surfaced as 401, indistinguishable from forgotten passwords. Found by
+different secret, total lockout, surfaced as 401, indistinguishable from forgotten passwords. Found by
 measurement. Deriving it from the value makes the two unable to disagree; an explicit
 `PASSWORD_PEPPER_ID` still overrides for an operator who wants a readable label in an audit.
 
 I also rejected interpolating a null id into the stored format, which wrote the literal string `"null"`
 and made a pepperless process unable to verify its own hashes. Caught by a test that exercises the KDF
-in a process without a pepper in its environment — which is the sort of coverage that only exists
+in a process without a pepper in its environment, which is the sort of coverage that only exists
 because someone was looking for a specific class of bug.
 
-**What would change my mind:** a deployment where the database is not the asset — a local demo, a
+**What would change my mind:** a deployment where the database is not the asset, a local demo, a
 fixture with published passwords. Then a pepper buys nothing and is one more secret to lose, and I would
 drop it. The operational cost is real and worth stating: **losing the pepper invalidates every stored
 password**, because there is nothing left to re-derive from, so it belongs beside `JWT_SECRET` in the
@@ -740,7 +740,7 @@ same secret store and in the same backup.
 
 **What I chose:** scrypt, at its current cost, plus a pepper.
 
-**Why:** Argon2id at 16 MB / t=2 — approximately the OWASP first recommendation — benchmarked at
+**Why:** Argon2id at 16 MB / t=2, approximately the OWASP first recommendation, benchmarked at
 **22.6ms against scrypt's 32.1ms**, so it is 30% faster *and* has better time-memory-tradeoff and
 side-channel resistance, because it separates memory from iteration count where scrypt ties them as
 `128 * N * r`. The numbers are real: I installed `hash-wasm` in a throwaway directory outside the repo
@@ -751,12 +751,12 @@ place to add supply-chain risk, in a repository whose entire Phase 11 was spent 
 six dependencies are what they claim to be. `hash-wasm` is WASM, so those timings are roughly 2-3x
 worse than a native build; the native `argon2` package needs node-gyp, and a reviewer without a
 compiler gets a broken checkout. And the security half of the claim is a standards judgement, not a
-measurement I made — I measured throughput only. The pepper captures most of the same benefit for zero
+measurement I made, I measured throughput only. The pepper captures most of the same benefit for zero
 dependencies at zero cost, which is a better trade than the one on offer.
 
 **What would change my mind:** this is the clearest "ask again later" in the repository. On Node 24+,
 where `node:crypto` may carry Argon2 natively, the dependency objection disappears and the migration is
-a one-function change — the format already carries cost parameters, so an algorithm field slots in
+a one-function change, the format already carries cost parameters, so an algorithm field slots in
 alongside them. I would want a native implementation and a benchmark on the target hardware before
 making the swap, not a WASM number from a laptop.
 
@@ -766,7 +766,7 @@ making the swap, not a WASM number from a laptop.
 Budgets are 200ms for login and 50ms for reads, and the login budget asserts `p50 > 5ms` as well as
 `p50 < 200ms`.
 
-**Why:** two numbers because one would be meaningless — a 200ms read budget would permit a 100x
+**Why:** two numbers because one would be meaningless, a 200ms read budget would permit a 100x
 regression and still pass, and a 5ms login budget would fail the moment anyone touched the KDF. The
 floor is the part I would defend hardest: a latency win bought by removing the password hash is a
 security regression that looks like an improvement on a dashboard, and no ceiling can catch it. Both
@@ -777,7 +777,7 @@ it cannot see a slow response path, a serialised write, or a header that costs s
 
 **What would change my mind:** a real deployment with a latency SLO. Then the budget belongs in
 config and in a monitoring alert rather than in a test, and a test that fails on a slow CI runner is
-worse than no test. Both are true today — the budget here is a regression guard for a single-process
+worse than no test. Both are true today, the budget here is a regression guard for a single-process
 demo, and it is labelled as one.
 
 ## Deliberately not built
@@ -820,11 +820,11 @@ Stated now for the things already decided; this section grows as the build does.
   `device:reboot` is unexercised.
 - **Rate limiting and a login attempt counter.** Sign-in is already 34.3 ms p50 and all of it is
   the given `scryptSync`, so the hash is the floor; both are listed as out of scope anyway.
-  **Superseded in Phase 11** — this was the reasoning that left an unauthenticated endpoint able to
+  **Superseded in Phase 11**, this was the reasoning that left an unauthenticated endpoint able to
   stall the whole server, and it was wrong in an instructive way. "The hash is the floor" treated
   the KDF cost as a fixed price rather than as work that queues behind itself on one thread. Both
   halves are now built: the hash runs on the threadpool, and the failures are throttled. The entry is
-  left in place because the error is the useful part — an expensive operation reachable without a
+  left in place because the error is the useful part, an expensive operation reachable without a
   credential is a lever, whatever its per-call cost.
 - **Bulk member and grant operations.** Creating fifty people is fifty requests. The engine and the
   endpoints are per-item by specification, and a bulk endpoint is a new authorisation surface rather

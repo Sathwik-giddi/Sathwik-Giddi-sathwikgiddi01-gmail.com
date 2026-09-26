@@ -17,7 +17,7 @@ market answers the second, because nothing else has to.
 **Authority has a provenance, and the console shows it without being asked.**
 
 Every permission in this system resolves to one of three places: the person's role, a grant someone
-made them, or an explicit refusal someone made against them. That is not decoration — it is the
+made them, or an explicit refusal someone made against them. That is not decoration, it is the
 `source` field on every permission the engine returns, and it is the thing that makes an access review
 possible at all.
 
@@ -29,7 +29,7 @@ So: provenance is rendered, not tooltipped.
 - A permission that comes from a **grant** rather than from your role is drawn with a dashed edge.
   The existing `.perm[data-source^="grant:"]` rule did this already; the redesign makes it read at a
   glance instead of hiding in a border style nobody notices.
-- The device row's session actions sit on a **provenance rule** — a 2px bar under the label, solid
+- The device row's session actions sit on a **provenance rule**, a 2px bar under the label, solid
   when the power comes from the role, dashed when it came from a grant. At a glance, across five
   machines, you can see which of your powers are your job and which were handed to you.
 - `+N grants` on a row stays, because "this row is not like the others" is worth knowing before you
@@ -39,7 +39,7 @@ Everything else is deliberately quiet so this reads.
 
 ## Colour
 
-**The accent is not a choice — it is the data.** `organizations.theme` carries one of six values
+**The accent is not a choice, it is the data.** `organizations.theme` carries one of six values
 (`cobalt`, `amber`, `moss`, `plum`, `rust`, `teal`) and `tests/ui.spec.js` asserts that switching
 organization measurably changes the shell's *computed* background. So the per-organization palette
 is the brand, and the job here was to build a neutral ramp good enough that six different accents can
@@ -77,20 +77,20 @@ background.
 ## Type
 
 No webfonts. The Content-Security-Policy is `font-src 'self'` and has to stay that way, so the type
-is a system stack — which means the personality has to come from *how* it is set, not which face it
+is a system stack, which means the personality has to come from *how* it is set, not which face it
 is.
 
 The rule that fixes the biggest problem in the old UI:
 
 > **Mono marks data, never structure.**
 
-The old stylesheet set structural labels — `DEVICE`, `KIND`, `STATE`, `YOUR ROLE` — in monospace.
+The old stylesheet set structural labels, `DEVICE`, `KIND`, `STATE`, `YOUR ROLE`, in monospace.
 That is the visual costume of "technical product" and it says nothing. Mono is now reserved for the
 things that genuinely are machine values: device ids, permission keys, counts, timestamps,
 `+N grants`. Those are worth marking because they are copy-paste targets.
 
 Structural labels are 11px sans, uppercase, `letter-spacing: .06em`, weight 600, `--ink-3`. The
-uppercase convention stays — it is a legitimate table convention — it just stops pretending to be
+uppercase convention stays, it is a legitimate table convention, it just stops pretending to be
 data.
 
 Headings get tight tracking (`-.015em`); body is 14px/1.5. Counts are tabular so columns of numbers
@@ -100,9 +100,9 @@ line up.
 
 Three radii, used for three different jobs:
 
-- `--r-sm 4px` — chips, tags, inputs
-- `--r-md 8px` — buttons, cards
-- `--r-lg 14px` — the sign-in card only
+- `--r-sm 4px`, chips, tags, inputs
+- `--r-md 8px`, buttons, cards
+- `--r-lg 14px`, the sign-in card only
 
 The old sheet used `999px` on org chips, kind tags, status tags, the role block and the theme pill.
 When everything is a pill, radius stops carrying information. Pills now mean one thing: *a status or
@@ -114,7 +114,7 @@ a hairline. A page where every card floats has no ground plane.
 ## Layout
 
 The old shell was a 244px full-height slab of saturated accent. That made the navigation louder than
-the content, which is backwards — the content is the access decision, the navigation is a list of six
+the content, which is backwards, the content is the access decision, the navigation is a list of six
 places to look.
 
 The sidebar is now a **quiet rail**: paper, a hairline on the right, the accent only on the active
@@ -127,7 +127,7 @@ stretch a table to unreadable width.
 
 120ms on hover, focus and the row-entering transition, and nothing else. No loops, no pulses, no
 entrances on scroll. `prefers-reduced-motion: reduce` removes all of it. The online indicator is a
-static ring, not a pulse — a fleet console that blinks is a console people stop trusting.
+static ring, not a pulse, a fleet console that blinks is a console people stop trusting.
 
 ## What was deliberately not done
 

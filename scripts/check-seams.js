@@ -9,6 +9,7 @@
 // Run: node scripts/check-seams.js
 
 import { readFileSync } from 'node:fs';
+import { resolveRelativeTime } from './seedtime.js';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -33,12 +34,7 @@ db.exec(readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8'));
 db.exec(readFileSync(new URL('../db/reference.sql', import.meta.url), 'utf8'));
 
 const seed = JSON.parse(readFileSync(new URL('../seed/orgs.json', import.meta.url), 'utf8'));
-const at = (o) => {
-  if (!o) return null;
-  const m = /^([+-])(\d+)([dhm])$/.exec(o);
-  if (!m) return o;
-  return new Date(Date.now() + (m[1] === '-' ? -1 : 1) * Number(m[2]) * { d: 864e5, h: 36e5, m: 6e4 }[m[3]]).toISOString();
-};
+const at = (v) => resolveRelativeTime(v);
 for (const o of seed.organizations)
   db.prepare('INSERT INTO organizations (id,name,theme,max_session_minutes) VALUES (?,?,?,?)').run(o.id, o.name, o.theme, o.maxSessionMinutes);
 for (const u of seed.users)
@@ -72,7 +68,7 @@ check('org-wide deny reason is explicit_deny', resolve(db, { userId: S, orgId: A
 
 // The self-consistency property that makes the union the right choice: the org-level answer the
 // console gates navigation on is the SAME question the org-level endpoints authorise. If a
-// permission is allowed org-level, assertCan at org level must agree — and where it is not
+// permission is allowed org-level, assertCan at org level must agree, and where it is not
 // allowed, assertCan must throw rather than quietly pass.
 console.log('\n== org-level gating and org-level authorisation cannot disagree ==');
 for (const p of ['device:list', 'user:read', 'session:view', 'audit:read', 'org:update', 'org:delete', 'session:start', 'device:control']) {
@@ -100,7 +96,7 @@ console.log('\n== D9 cross-scope laundering ==');
   check('cannot grant what an org-wide deny took away', throws(() => sam.assertMayGrant(['device:terminal'])), 'explicit_deny');
   check('  ...nor on one device', throws(() => sam.assertMayGrant(['device:terminal'], 'dev_lab_win_01')), 'explicit_deny');
   // A wildcard is refused too, but WHICH reason comes back depends on which permission in the
-  // pattern she lacks first — the catalogue is ordered, and `device:provision` sorts before
+  // pattern she lacks first, the catalogue is ordered, and `device:provision` sorts before
   // `device:terminal`. Asserting the refusal and the vocabulary, not one exact string, because
   // pinning the string would make the test depend on catalogue order.
   check('  ...nor smuggled inside a wildcard', ['missing_permission', 'explicit_deny'].includes(throws(() => sam.assertMayGrant(['device:*']))), true);
@@ -167,7 +163,7 @@ console.log('\n== the role on a membership cannot be a role that does not exist 
 {
   // I wrote this test expecting the engine to have a fallback for a membership pointing at a
   // retired role. It cannot happen: memberships.role REFERENCES roles(key), so the write is
-  // refused. That is a guarantee I can lean on instead of coding a branch for it — and the
+  // refused. That is a guarantee I can lean on instead of coding a branch for it, and the
   // branch would have been untestable, which is the real cost of writing it.
   check('setting a membership to a nonexistent role is refused by the FK', (() => {
     try { db.prepare("UPDATE memberships SET role='ghost_role' WHERE org_id=? AND user_id=?").run(A, V); return 'updated'; }
@@ -232,7 +228,7 @@ console.log('\n== malformed-token fuzzing: nothing gets past verifyAccessToken =
   // answers "is this authentic and well-formed", the context answers "does it still describe a
   // real (user, org) pair". Asserting the outcome rather than the layer is the honest test.
   const shapeOnly = {
-    'pv negative': 'a stale version is not the parser\'s business — context.js compares it',
+    'pv negative': 'a stale version is not the parser\'s business, context.js compares it',
     'exp far future': 'only the signature grants authority, and we only mint 15-minute tokens',
     'unicode in org': 'a valid string claim; unaddressable because no membership has that org',
     'path traversal in org': 'bound as a SQL parameter, so it can only ever fail to match',
@@ -253,7 +249,7 @@ console.log('\n== malformed-token fuzzing: nothing gets past verifyAccessToken =
   }
 
   for (const [label, explanation] of Object.entries(shapeOnly)) {
-    check(`${label} — authentic, so accepted by the parser`, outcomes[label], 'accepted');
+    check(`${label}, authentic, so accepted by the parser`, outcomes[label], 'accepted');
     check(`  ...${explanation}`, (() => {
       const claims = verifyAccessToken(cases[label], SECRET);
       const m = db.prepare('SELECT m.id FROM memberships m WHERE m.org_id=? AND m.user_id=?').get(claims.org, claims.sub);
@@ -276,7 +272,7 @@ console.log('\n== D10/D19: the database refuses what a check-then-act would race
   mkSession('ses_x1', 'control');
   check('a second exclusive session on the same device is refused by the index', (() => { try { mkSession('ses_x2', 'control'); return 'inserted'; } catch (e) { return e.code; } })(), 'SQLITE_CONSTRAINT_UNIQUE');
   check('a second TERMINAL is refused too', (() => { try { mkSession('ses_x3', 'terminal'); return 'inserted'; } catch (e) { return e.code; } })(), 'SQLITE_CONSTRAINT_UNIQUE');
-  check('a second VIEW is allowed — view is deliberately not exclusive', (() => { try { mkSession('ses_x4', 'view'); return 'inserted'; } catch { return 'refused'; } })(), 'inserted');
+  check('a second VIEW is allowed, view is deliberately not exclusive', (() => { try { mkSession('ses_x4', 'view'); return 'inserted'; } catch { return 'refused'; } })(), 'inserted');
   check('  ...and a third', (() => { try { mkSession('ses_x5', 'view'); return 'inserted'; } catch { return 'refused'; } })(), 'inserted');
   check('releasing the exclusive session frees the device', (() => { db.prepare("UPDATE sessions SET state='ended', end_reason='user_stopped' WHERE id='ses_x1'").run(); try { mkSession('ses_x6', 'control'); return 'inserted'; } catch { return 'refused'; } })(), 'inserted');
 
@@ -292,7 +288,7 @@ console.log('\n== D10/D19: the database refuses what a check-then-act would race
 
   // Prove the pragma is what makes the FK fire, on a connection of its own, rather than trusting
   // the README. The probe needs a real grant row, or the grant_id FK fires first and the test
-  // would pass for the wrong reason — which is exactly what happened the first time I wrote it.
+  // would pass for the wrong reason, which is exactly what happened the first time I wrote it.
   const probe = openDatabase(':memory:');
   probe.exec(readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8'));
   probe.exec(readFileSync(new URL('../db/reference.sql', import.meta.url), 'utf8'));
@@ -365,5 +361,5 @@ console.log('\n== a real cross-process race on the exclusive-session index ==');
   rmSync(dir, { recursive: true, force: true });
 }
 
-console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
+console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}, ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

@@ -1,4 +1,4 @@
-// devices.js — device CRUD, transfer, and grants.
+// devices.js, device CRUD, transfer, and grants.
 //
 // Two things in here are the reason this file is more than CRUD:
 //
@@ -9,8 +9,8 @@
 //     denied is ABSENT from the list, not present with the metadata stripped.
 //
 //  2. GRANT CREATION DELEGATES ITS VALIDATION TO THE FOREIGN KEY. The route checks the two things
-//     the database cannot know — that the pattern set is non-empty, and that the caller is not
-//     laundering — and then lets `grant_permissions.permission REFERENCES
+//     the database cannot know, that the pattern set is non-empty, and that the caller is not
+//     laundering, and then lets `grant_permissions.permission REFERENCES
 //     permission_patterns(pattern)` reject `device:teleport` (D19). The FK's error is translated
 //     into a 400 with `reason: "unknown_permission"` in one place, so it is a validation failure
 //     rather than a 500, and a typo is never a silent deny.
@@ -50,7 +50,7 @@ export function register(router) {
       const devices = stmt(ctx.db, 'devicesOfOrg').all(params.org);
 
       // One resolver, already built by context.js, answers every row. Adding devices to the org
-      // adds no queries — the thing BRIEF.md §6 warns about is a query per row, not a per-row cost.
+      // adds no queries, the thing BRIEF.md §6 warns about is a query per row, not a per-row cost.
       const visible = devices.filter((d) => {
         const verdict = ctx.resolver.verdict('device:view', d.id);
         // If the catalogue ever lacks device:view, list everything rather than nothing: an absent
@@ -62,7 +62,7 @@ export function register(router) {
       return send(res, 200, {
         devices: visible.map((d) => deviceRow(d, ctx.resolver.permissionsFor(d.id))),
         // `total` is the count of rows RETURNED, not the count of rows in the org. It used to be
-        // `devices.length` — the unfiltered count — which undid the filter one field away: a caller
+        // `devices.length`, the unfiltered count, which undid the filter one field away: a caller
         // denied `device:view` on one machine received 4 rows and was told there were 5, which is
         // both an information leak and a direct contradiction of "absence is not redaction"
         // (UI-INVENTORY.md §1.3). Verified before the fix: 4 rows, total 5.
@@ -135,7 +135,7 @@ export function register(router) {
 
   // --- transfer ------------------------------------------------------------
   // `device:provision` in BOTH orgs. The caller's token only speaks for `:org`, so authority in the
-  // destination is resolved directly against that org's membership — there is no token to mint
+  // destination is resolved directly against that org's membership, there is no token to mint
   // for an org you are not currently addressing, and inventing one would defeat the point.
   router.post('/v1/orgs/:org/devices/:id/transfer', async (ctx, params, res) => {
     assertSameOrg(ctx, params.org);
@@ -155,7 +155,7 @@ export function register(router) {
       // Membership is part of "can you see this?", so it is answered BEFORE the destination's
       // permissions, and a destination you are not a member of is a 404 rather than a 403.
       //
-      // I had this the other way round, and the comment I wrote argued FOR it — I said a 404 "would
+      // I had this the other way round, and the comment I wrote argued FOR it, I said a 404 "would
       // confirm the org exists", which is precisely the reasoning PERMISSIONS.md §5 rejects. The
       // order I actually had was: org exists? -> 404. then assertCan(device:provision) -> 403. So
       // walking the id space gave 403 for every org that exists and is not soft-deleted, and 404
@@ -175,7 +175,7 @@ export function register(router) {
 
       // Now authority: device:provision in the DESTINATION as well (BRIEF.md §5.1). The caller's
       // token only speaks for the source org, so this is resolved directly against the destination
-      // membership — the one deliberate cross-org authorisation in the system, and the reason the
+      // membership, the one deliberate cross-org authorisation in the system, and the reason the
       // membership check above has to come first.
       const destination = createResolver(ctx.db, { userId: ctx.userId, orgId: toOrgId });
       destination.assertCan('device:provision');
@@ -191,7 +191,7 @@ export function register(router) {
       // Grants in the source org that named this device are left alone deliberately. They are
       // org-scoped by construction, so they are already inert: the device is no longer in that org,
       // so no question in that org can ever name it. If the device is transferred back, they
-      // apply again — which is the correct reading of "the org granted this person access to that
+      // apply again, which is the correct reading of "the org granted this person access to that
       // machine". Written up in DECISIONS.md.
       return send(res, 200, { ok: true, id: device.id, from: params.org, to: toOrgId });
     });
@@ -201,7 +201,7 @@ export function register(router) {
   // Grants
   // =========================================================================
 
-  // Gated on `user:read`, not `grant:create` — there is no `grant:read` permission in the
+  // Gated on `user:read`, not `grant:create`, there is no `grant:read` permission in the
   // catalogue, and UI-INVENTORY.md §3 says so explicitly. Creating and revoking are separate
   // permissions, so an auditor can read the grants table without being able to change it.
   router.get('/v1/orgs/:org/grants', async (ctx, params, res) => {
@@ -246,11 +246,11 @@ export function register(router) {
       const patterns = permissions.map((p) => requireString(p, 'permission', { max: 80 }));
 
       // A grant is org-scoped by construction, so the target has to be a member of THIS org. A user
-      // from another org is 404, not 403 — the same invisibility rule as a device.
+      // from another org is 404, not 403, the same invisibility rule as a device.
       //
       // `status` is checked, and 'active' is the only acceptable answer: AUTH-DATA-MODEL.md §8
       // says "userId is an ACTIVE member of this org → 404". I had only excluded 'removed', which
-      // meant a grant could be attached to a `suspended` or an un-accepted `invited` membership —
+      // meant a grant could be attached to a `suspended` or an un-accepted `invited` membership,
       // authority staged for someone who cannot use it, and pre-loaded for the moment they are
       // reinstated.
       const target = stmt(ctx.db, 'membershipByOrgUser').get(params.org, userId);
@@ -277,12 +277,12 @@ export function register(router) {
         //
         //   PERMISSIONS.md §5, code table:  "| `GRANT_EXPIRED` | 400 | creating a grant that is
         //                                        already expired |"
-        //   PERMISSIONS.md §5, prose:        "`reason` is the machine-readable cause —
+        //   PERMISSIONS.md §5, prose:        "`reason` is the machine-readable cause,
         //                                        `missing_permission`, `explicit_deny`,
         //                                        `suspended`, `expired_grant`, `scope_mismatch`"
         //
         // So the CODE is `GRANT_EXPIRED` and the REASON is `expired_grant`, and I was emitting
-        // `invalid_window` for the reason — a word that appears nowhere in the specification, on an
+        // `invalid_window` for the reason, a word that appears nowhere in the specification, on an
         // error the specification names twice. My own DECISIONS.md even claimed I emitted
         // `expired_grant`. Both are now what the documents say.
         throw new HttpError(400, 'GRANT_EXPIRED', 'expiresAt is in the past', 'expired_grant');
@@ -352,7 +352,7 @@ export function register(router) {
   //
   // The console needs the permission catalogue (to offer checkboxes on the grant form) and the
   // role list (to offer a role on an invite or a role-select). Both are read from the tables and
-  // sent over the wire, because the alternative is a copy of the catalogue in `web/` — which is
+  // sent over the wire, because the alternative is a copy of the catalogue in `web/`, which is
   // the one thing BRIEF.md §5.3 and UI-INVENTORY.md §1 both forbid in spirit: two copies of the
   // model, which drift. Requires no org-scoped permission: this is the schema's reference data,
   // not anybody's authority.

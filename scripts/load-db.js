@@ -5,6 +5,7 @@ import { readFileSync, rmSync, existsSync } from 'node:fs';
 import { openDatabase, newId } from '../server/db.js';
 import { hashPassword } from '../server/auth.js';
 import { readNonce, buildOverlay, applyOverlay, describeOverlay } from './personalise.js';
+import { resolveRelativeTime, assertSeedTimesParse } from './seedtime.js';
 
 const DB_FILE = process.env.DATABASE_FILE ?? 'app.db';
 const here = (p) => new URL(p, import.meta.url).pathname;
@@ -19,17 +20,21 @@ db.exec(readFileSync(here('../db/reference.sql'), 'utf8'));
 
 const seed = JSON.parse(readFileSync(here('../seed/orgs.json'), 'utf8'));
 
-// Timestamps in the fixture are RELATIVE ('-2h', '+7d', 'now') so the fixture never
-// goes stale and seeded grants never silently expire.
-function resolveTime(value) {
-  if (value === null || value === undefined) return null;
-  const m = /^([+-])(\d+)([dhm])$/.exec(value);
-  if (!m) return value; // already absolute ISO-8601
-  const unit = { d: 864e5, h: 36e5, m: 6e4 }[m[3]];
-  return new Date(Date.now() + (m[1] === '-' ? -1 : 1) * Number(m[2]) * unit).toISOString();
+// Timestamps in the fixture are RELATIVE ('-2h', '+7d', '-2h30m') so the fixture never goes stale
+// and seeded grants never silently expire. The parsing lives in ./seedtime.js because three
+// fixture builders needed it and all three had the same bug: a compound offset like '-2h30m' did
+// not match, fell through as if it were an absolute timestamp, and reached the audit screen as
+// "Invalid Date". See the note at the top of that file.
+const badTimes = assertSeedTimesParse(seed);
+if (badTimes.length) {
+  // Loudly, at load, rather than as a rendering artefact later.
+  throw new Error(
+    `scripts/load-db.js: ${badTimes.length} fixture timestamp(s) are neither a relative offset ` +
+    `nor a parseable date:\n  ${badTimes.join('\n  ')}`,
+  );
 }
 
-// The fixture stores the password in plaintext on purpose. Hash it HERE — never copy
+// The fixture stores the password in plaintext on purpose. Hash it HERE, never copy
 // seedPassword into password_hash. Awaited: `hashPassword` runs scrypt on the threadpool.
 const passwordHash = await hashPassword(seed.seedPassword);
 
@@ -47,7 +52,7 @@ const load = db.transaction(() => {
   for (const m of seed.memberships) {
     db.prepare(
       `INSERT INTO memberships (id,org_id,user_id,role,status,joined_at) VALUES (?,?,?,?,?,?)`
-    ).run(newId('mem'), m.orgId, m.userId, m.role, m.status ?? 'active', resolveTime(m.joinedAt));
+    ).run(newId('mem'), m.orgId, m.userId, m.role, m.status ?? 'active', resolveRelativeTime(m.joinedAt));
   }
 
   for (const d of seed.devices) {
@@ -60,7 +65,7 @@ const load = db.transaction(() => {
       `INSERT INTO grants (id,org_id,user_id,device_id,effect,starts_at,expires_at,created_by)
        VALUES (?,?,?,?,?,?,?,?)`
     ).run(g.id, g.orgId, g.userId, g.deviceId ?? null, g.effect,
-          resolveTime(g.startsAt), resolveTime(g.expiresAt), g.createdBy);
+          resolveRelativeTime(g.startsAt), resolveRelativeTime(g.expiresAt), g.createdBy);
 
     for (const p of g.permissions) {
       db.prepare('INSERT INTO grant_permissions (grant_id,permission) VALUES (?,?)').run(g.id, p);
@@ -72,7 +77,7 @@ const load = db.transaction(() => {
       `INSERT INTO sessions (id,org_id,user_id,device_id,mode,state,end_reason,authorized_by,started_at,expires_at,ended_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?)`
     ).run(s.id, s.orgId, s.userId, s.deviceId, s.mode, s.state, s.endReason ?? null,
-          JSON.stringify(s.authorizedBy), resolveTime(s.startedAt), resolveTime(s.expiresAt), resolveTime(s.endedAt));
+          JSON.stringify(s.authorizedBy), resolveRelativeTime(s.startedAt), resolveRelativeTime(s.expiresAt), resolveRelativeTime(s.endedAt));
   }
 
   for (const e of seed.auditEvents) {
@@ -80,7 +85,7 @@ const load = db.transaction(() => {
       `INSERT INTO audit_events (id,org_id,actor_id,action,target_type,target_id,result,reason_code,at)
        VALUES (?,?,?,?,?,?,?,?,?)`
     ).run(e.id, e.orgId, e.actorId, e.action, e.targetType ?? null, e.targetId ?? null,
-          e.result, e.reasonCode ?? null, resolveTime(e.at));
+          e.result, e.reasonCode ?? null, resolveRelativeTime(e.at));
   }
 });
 load();

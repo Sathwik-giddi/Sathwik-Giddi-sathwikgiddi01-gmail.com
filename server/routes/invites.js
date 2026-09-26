@@ -1,4 +1,4 @@
-// invites.js — the only way a person joins an organization (D14).
+// invites.js, the only way a person joins an organization (D14).
 //
 // The lifecycle, which is the part worth stating because no document enumerates it:
 //
@@ -11,7 +11,7 @@
 // "Dead" is computed, never stored as a status, because the schema has no status column: an
 // invite is live when `accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now`. The
 // partial unique index `one_live_invite_per_email` keys off the first two, so an expired invite
-// does not block a fresh one for the same address — which is right, and is why I did not add an
+// does not block a fresh one for the same address, which is right, and is why I did not add an
 // application-level "is there already an invite" check that would have to reproduce that rule.
 
 import { send, notFound, badRequest, conflict, gone, forbidden, unauthenticated, tooManyRequests } from '../http.js';
@@ -47,7 +47,7 @@ const isExpired = (invite) => new Date(invite.expires_at).getTime() <= Date.now(
  * `GET /invites/:token` is PUBLIC and unauthenticated, which makes it the one endpoint in the
  * system that hands information to a caller we know nothing about. The raw token is a bearer
  * credential, so the response carries the minimum that lets someone decide whether to accept:
- * the org's NAME, the email, and the role. Not the org id, not a device count, not a member list —
+ * the org's NAME, the email, and the role. Not the org id, not a device count, not a member list,
  * `scripts/check-api.js:171-172` asserts the body contains neither `lab-mac` nor `org_acme`, and
  * `tests/ui.spec.js:312` asserts the same thing through the rendered page.
  */
@@ -78,7 +78,7 @@ export function register(router) {
       // path cannot be used to sidestep the role-change path.
       //
       // `assertRoleAssignable`, not `assertCanModify`. I had the latter here, which compares the
-      // caller's rank against the INVITED role as if it were an existing member — and since an
+      // caller's rank against the INVITED role as if it were an existing member, and since an
       // invited role has no membership to be "strictly lower" than, an admin inviting an admin was
       // refused with "a admin cannot modify a admin". Nobody is being modified by an invite.
       assertRoleAssignable(ctx.db, ctx.role, role);
@@ -88,7 +88,7 @@ export function register(router) {
       // not a race because the index still catches the concurrent case below.
       //
       // `status <> 'removed'` matters and I got it wrong first: a removed member still has a row,
-      // so without this filter a person who had been removed could never be invited back — the one
+      // so without this filter a person who had been removed could never be invited back, the one
       // moment the flow most needs to work. Offboard/rehire is a named seam, and this was it.
       const byEmail = ctx.db.prepare(
         `SELECT m.status FROM memberships m JOIN users u ON u.id = m.user_id
@@ -104,7 +104,7 @@ export function register(router) {
 
       const create = ctx.db.transaction(() => {
         // Hashed at rest (D17). The raw value is returned exactly once, here, and never stored,
-        // never logged, and never recoverable — there is no endpoint that can show it again.
+        // never logged, and never recoverable, there is no endpoint that can show it again.
         stmt(ctx.db, 'insertInvite').run(id, params.org, email, role, hashInviteToken(raw), ctx.userId, expiresAt);
         auditSuccess(ctx.db, ctx, { action: 'invite.create', targetType: 'invite', targetId: id });
       });
@@ -137,7 +137,7 @@ export function register(router) {
       ctx.resolver.assertCan('user:invite');
       const invite = ctx.db.prepare('SELECT * FROM invites WHERE id = ? AND org_id = ?').get(params.id, params.org);
       if (!invite) throw notFound();
-      if (!isLive(invite)) throw notFound();   // already spent — nothing left to see
+      if (!isLive(invite)) throw notFound();   // already spent, nothing left to see
 
       const revoke = ctx.db.transaction(() => {
         stmt(ctx.db, 'revokeInvite').run(nowIso(), invite.id);
@@ -149,7 +149,7 @@ export function register(router) {
   });
 
   // =========================================================================
-  // Public. No token, no org in the path — just the invite token.
+  // Public. No token, no org in the path, just the invite token.
   // =========================================================================
 
   // 404 for "no such token" and 410 for "this token existed and is spent". The distinction is
@@ -170,14 +170,14 @@ export function register(router) {
   router.post('/v1/invites/:token/accept', async (ctx, params, res) => {
     // Gated before anything else, and with no credential to key on: an invite token is a bearer
     // credential that has not been spent yet, so there is nothing to count failures against. The
-    // address ceiling in server/ratelimit.js is the whole defence here, which is the right shape —
+    // address ceiling in server/ratelimit.js is the whole defence here, which is the right shape,
     // this endpoint creates accounts, and creating accounts in a loop is the thing to bound.
     const gate = attempt(ctx.req, null);
     if (gate.limited) throw tooManyRequests(gate.retryAfter);
 
     const invite = lookupInvite(ctx.db, params.token);
     // Redeeming a spent invite is a CONFLICT with the current state of the resource, not a
-    // description of a resource that is gone — which is why this is 409 and the GET above is 410.
+    // description of a resource that is gone, which is why this is 409 and the GET above is 410.
     // `scripts/check-api.js:178` pins the 409.
     assertUsable(invite, () => conflict('this invite has already been used', 'INVITE_USED'));
     const org = stmt(ctx.db, 'orgById').get(invite.org_id);
@@ -215,7 +215,7 @@ export function register(router) {
         // sign-in would refuse it, and with the same wording, so this endpoint is not a password
         // oracle for addresses that happen to exist.
         if (password === null || !(await verifyPassword(password, existingUser.password_hash))) {
-          throw unauthenticated('that email already has an account — enter its existing password to join');
+          throw unauthenticated('That email already has an account. Enter its existing password to join.');
         }
         userId = existingUser.id;
       }
@@ -238,7 +238,7 @@ export function register(router) {
 
     // Re-read the invite now that the account question is settled. Two accepts of ONE invite both
     // read it as live at the top of the handler; by the time the loser gets here the winner has
-    // committed, so the honest answer is "this invite is spent" — not "you are already a member",
+    // committed, so the honest answer is "this invite is spent", not "you are already a member",
     // which is a true but useless thing to tell someone who clicked a link five seconds ago.
     // `scripts/check-http-seams.js` fires two accepts in parallel and asserts exactly this.
     const current = lookupInvite(ctx.db, params.token);
@@ -253,8 +253,8 @@ export function register(router) {
     const accept = ctx.db.transaction(() => {
       if (already) {
         // Re-hire: revive the existing membership row rather than inserting a second one, because
-        // `memberships` has UNIQUE (org_id, user_id). Its grants were never deleted on removal —
-        // see DECISIONS.md, decision 5 — so they come back with the membership.
+        // `memberships` has UNIQUE (org_id, user_id). Its grants were never deleted on removal,
+        // see DECISIONS.md, decision 5, so they come back with the membership.
         ctx.db.prepare(`UPDATE memberships SET status='active', role=?, joined_at=COALESCE(joined_at, ?), perm_version = perm_version + 1 WHERE id = ?`)
           .run(invite.role, nowIso(), already.id);
       } else {
@@ -292,8 +292,8 @@ export function register(router) {
 
 /**
  * Resolve a raw invite token to its row, or 404. Deliberately does NOT check whether the invite is
- * still usable: the two callers disagree about which status a spent invite should be — 410 GONE
- * when describing the token over GET, 409 CONFLICT when trying to redeem it over POST — so the
+ * still usable: the two callers disagree about which status a spent invite should be, 410 GONE
+ * when describing the token over GET, 409 CONFLICT when trying to redeem it over POST, so the
  * liveness check belongs to the caller.
  */
 function lookupInvite(db, raw) {
@@ -316,7 +316,7 @@ const inviteDeadReason = (invite) =>
  *
  * `fail` RETURNS an HttpError rather than throwing it, and this THROWS what it returns. Getting
  * that wrong is the single nastiest bug I hit in this build: the first version called `fail()` and
- * threw away its return value, so neither the 410 nor the 409 path ever fired — a spent invite
+ * threw away its return value, so neither the 410 nor the 409 path ever fired, a spent invite
  * sailed through as though it were live. It was caught only because `check-api.js:178` asserts
  * the 409 and I happened to also be asserting the CODE, which was coming back as `ALREADY_MEMBER`
  * instead of `INVITE_USED`. The shipped assertion passed the whole time, because both are 409s.

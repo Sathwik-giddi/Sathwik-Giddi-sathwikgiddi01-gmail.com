@@ -4,7 +4,7 @@
 //   - read the bearer token and verify it with verifyAccessToken() from ./auth.js
 //   - look the membership up and refuse a token whose org or membership is gone
 //   - THE TOKEN'S org CLAIM IS THE ONLY ORG THE CALLER MAY ADDRESS. A request that names a
-//     different org is INVISIBLE — 404, never 403. Isolation is structural: the caller cannot
+//     different org is INVISIBLE, 404, never 403. Isolation is structural: the caller cannot
 //     name another org, rather than being filtered afterwards.
 //   - check freshness against memberships.perm_version, so a role or grant change takes effect
 //     on the NEXT request rather than at token expiry
@@ -12,7 +12,7 @@
 //
 // The org is taken from the token and NEVER from the URL. A route that reads `:org` compares it
 // against `caller.orgId` and 404s on a mismatch, so the comparison is a filter on an id the
-// caller already proved they hold — not the thing that establishes which org they are in.
+// caller already proved they hold, not the thing that establishes which org they are in.
 
 import { verifyAccessToken, assertFresh } from './auth.js';
 import { unauthenticated, forbidden, notFound } from './http.js';
@@ -44,7 +44,7 @@ function readBearer(req) {
  * The caller carries { userId, orgId, role, membership, claims, resolver }. `resolver` is the
  * per-request permission resolver: one catalogue read, one baseline read, one grant read for the
  * whole request, with every device answered from memory after that. It is created here and dies
- * with the request, which is what makes it safe — see the note on `createResolver`.
+ * with the request, which is what makes it safe, see the note on `createResolver`.
  */
 export function authenticate(db, secret) {
   return function buildContext(req, params) {
@@ -71,7 +71,7 @@ export function authenticate(db, secret) {
     };
 
     // D16: suspension is reversible, so it is a 403 with an empty permission set rather than a
-    // 401 — the credential is still good, the account is not usable. `removed` and `invited` are
+    // 401, the credential is still good, the account is not usable. `removed` and `invited` are
     // both 401: there is no membership to speak of, active or not.
     if (membership.status === 'suspended') {
       throw forbidden('membership is suspended', 'suspended');
@@ -95,7 +95,7 @@ export function authenticate(db, secret) {
     //
     // Before this check, `ctx.role` was `claims.role`, which meant a token saying `role:"owner"`
     // carried owner rank into lifecycle.js's `assertRoleAssignable`/`assertCanModify` and could
-    // promote a viewer to owner. Signing is what makes a claim authentic — not the field name.
+    // promote a viewer to owner. Signing is what makes a claim authentic, not the field name.
     if (claims.role !== membership.role) {
       throw unauthenticated('token role does not match the membership');
     }
@@ -136,7 +136,7 @@ export function optionalCaller(db, secret, req) {
 
 /**
  * The structural isolation check. Called by every route that takes an `:org` parameter, and
- * deliberately the FIRST thing any of them do — before any permission question, because "can you
+ * deliberately the FIRST thing any of them do, before any permission question, because "can you
  * see this?" has to be answered before "may you do this?" (PERMISSIONS.md §5).
  *
  * A token scoped to org A asking about org B gets `404`, and the body is byte-identical to the

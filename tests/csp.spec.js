@@ -3,7 +3,7 @@
 // This file exists because of a specific near-miss. The first version of `server/headers.js` sent
 // the policy as `X-Content-Security-Policy`. That name was an abandoned draft: no browser has ever
 // implemented it. Every other header was present, the header dump looked correct, all 34 UI tests
-// passed — and the policy was enforcing nothing at all, because the browser did not recognise the
+// passed, and the policy was enforcing nothing at all, because the browser did not recognise the
 // header and treated the document as having no policy.
 //
 // A header-presence test cannot catch that. It reads the same either way. Only a browser can tell
@@ -61,7 +61,7 @@ test.describe('Content-Security-Policy', () => {
     await page.waitForTimeout(500);
 
     const bypassed = await page.evaluate(() => window.__cspBypassed === true);
-    expect(bypassed, 'an injected inline script executed — the CSP is not being enforced').toBe(false);
+    expect(bypassed, 'an injected inline script executed, the CSP is not being enforced').toBe(false);
 
     const reported = await page.evaluate(() => window.__cspViolations ?? []);
     expect(
@@ -86,7 +86,7 @@ test.describe('Content-Security-Policy', () => {
     await page.getByTestId('login-password').fill('demo1234');
     await page.getByTestId('login-submit').click();
     await expect(page.getByTestId('app-shell')).toBeVisible({ timeout: 10_000 });
-    // The bundle loaded, resolved data and rendered a card — a blocked module script would leave
+    // The bundle loaded, resolved data and rendered a card, a blocked module script would leave
     // the sign-in form on screen forever, so reaching the shell proves the external script ran.
     await expect(page.getByTestId('nav-devices')).toBeVisible();
 

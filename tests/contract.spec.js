@@ -9,7 +9,7 @@
 // test for a rule is indistinguishable from absence of the rule, so this file is the test.
 //
 // Every org, user and device here comes from the shipped fixture, because this is a rendering
-// contract and not a resolution one — `scripts/check-personalisation.js` covers the engine against
+// contract and not a resolution one, `scripts/check-personalisation.js` covers the engine against
 // a personalised fixture.
 
 import { test, expect } from '@playwright/test';
@@ -63,7 +63,7 @@ const IN_FORM = [
 test('every rendered permission-gated element carries the contract attributes', async ({ page }) => {
   await login(page, 'owner@acme.test'); // an owner holds every documented permission
 
-  // `test.skip()` inside a loop skips the WHOLE test, not the one assertion — my first version
+  // `test.skip()` inside a loop skips the WHOLE test, not the one assertion, my first version
   // called it and this test never ran at all, which is the exact failure mode a contract test
   // exists to prevent. So: skip nothing, count what was checked, and prove the count is real.
   const checked = [];
@@ -129,7 +129,7 @@ test('an admin sees the Admin card with rename but NOT delete, and both carry at
   await expect(rename).toHaveAttribute('data-permission', 'org:update');
   await expect(rename).toHaveAttribute('data-state', 'unlocked');
 
-  // org:delete is not held, so the element is absent — not disabled, not "locked".
+  // org:delete is not held, so the element is absent, not disabled, not "locked".
   await expect(page.getByTestId('delete-org')).toHaveCount(0);
   // ...and the attribute is absent with it. There is no data-state="locked" in this console.
   await expect(page.locator('[data-state="locked"]')).toHaveCount(0);
@@ -160,7 +160,7 @@ test('the session row keeps its lifecycle out of data-state', async ({ page }) =
 // describes this membership, so get a new one from the refresh cookie and replay
 // the request. Two things about it are load-bearing and neither was tested:
 //
-//   1. it must be BOUNDED. Unguarded it is unbounded recursion — two HTTP requests
+//   1. it must be BOUNDED. Unguarded it is unbounded recursion, two HTTP requests
 //      per level, forever, if the server keeps saying TOKEN_STALE.
 //   2. it must replay into the RIGHT ORG. `refresh_tokens` has no org column, so
 //      the refresh hands back the default org's token; replaying the original
@@ -202,7 +202,7 @@ test('a stale token is recovered from exactly once, in the right org', async ({ 
 
 test('a server that ALWAYS says TOKEN_STALE does not loop forever', async ({ page }) => {
   // Sign in FIRST, then install the route. Installing it before login meant the very first devices
-  // load failed, the recovery correctly gave up, and the console signed itself out — so the helper
+  // load failed, the recovery correctly gave up, and the console signed itself out, so the helper
   // was waiting for an app-shell that had legitimately gone. The behaviour under test is the
   // bound, and the bound is only reachable once there is a session to lose.
   await login(page, 'dana@example.test');
@@ -236,7 +236,7 @@ test('the audit pager actually pages', async ({ page }) => {
   const auth = await page.request.post('/v1/auth/login', { data: { email: 'dana@example.test', password: 'demo1234' } });
   const { token } = await auth.json();
 
-  // One owner, one org, and a pile of grants — each of which writes an audit row.
+  // One owner, one org, and a pile of grants, each of which writes an audit row.
   const org = await (await page.request.post('/v1/orgs', { headers: { authorization: `Bearer ${token}` }, data: { name: 'Pager Contract' } })).json();
   const orgToken = (await (await page.request.post('/v1/auth/token', { headers: { authorization: `Bearer ${token}` }, data: { orgId: org.id } })).json()).token;
   const inv = await (await page.request.post(`/v1/orgs/${org.id}/invites`, { headers: { authorization: `Bearer ${orgToken}` }, data: { email: 'pager@example.test', role: 'viewer' } })).json();
@@ -254,7 +254,7 @@ test('the audit pager actually pages', async ({ page }) => {
 
   // `page.request` shares the context's cookie jar, so the API sign-in above already left a valid
   // refresh cookie and the console boots straight into the shell. (Filling the login form here
-  // timed out on a form that does not exist — the harness, not the app, was wrong.) So use the
+  // timed out on a form that does not exist, the harness, not the app, was wrong.) So use the
   // session we have and switch into the org we just filled with events.
   const calls = [];
   page.on('request', (r) => { if (r.url().includes('/audit')) calls.push(r.url()); });

@@ -1,4 +1,4 @@
-// sessions.js — opening, listing, reading and ending remote-access sessions.
+// sessions.js, opening, listing, reading and ending remote-access sessions.
 //
 // A session is a RECORD (BRIEF.md §4: no input injection, no shell, no capture). What this file
 // actually decides is who may open one, on which device, in which mode, and when an existing one
@@ -14,7 +14,7 @@
 //   EXCLUSIVE  control and terminal are exclusive per device (D10). Enforced by the partial unique
 //              index `one_exclusive_session_per_device`, NOT by a check-then-insert. Two
 //              simultaneous requests therefore produce exactly one 201 and one 409 with no
-//              application-level locking at all — see the 8-process race in check-seams.js.
+//              application-level locking at all, see the 8-process race in check-seams.js.
 //
 //   BOUNDED    every session gets expires_at = now + org.max_session_minutes, and expired sessions
 //              are retired lazily on every read and write that touches them.
@@ -66,7 +66,7 @@ export function register(router) {
       if (!device) throw notFound();
 
       // The compound check. Throws 403 with `missing_permission` or `missing_device_permission`,
-      // and returns the authorized_by snapshot — the grants that actually decided it.
+      // and returns the authorized_by snapshot, the grants that actually decided it.
       const authorizedBy = ctx.resolver.assertCanStartSession(mode, device.id);
 
       const id = newId('ses');
@@ -121,7 +121,7 @@ export function register(router) {
   });
 
   // =========================================================================
-  // One session, by id. Not org-scoped in the path, so the org comes from the token — and the
+  // One session, by id. Not org-scoped in the path, so the org comes from the token, and the
   // session's own org_id has to match it, or it is a 404.
   // =========================================================================
   router.get('/v1/sessions/:id', async (ctx, params, res) => {
@@ -130,7 +130,7 @@ export function register(router) {
     expireStaleSessions(ctx.db, { orgId: ctx.orgId });
 
     return auditDenials(ctx.db, ctx, { action: 'session.read.one', targetType: 'session', targetId: session.id }, () => {
-      // "participant OR session:view" — you can always watch your own session, whatever your role.
+      // "participant OR session:view", you can always watch your own session, whatever your role.
       if (session.user_id !== ctx.userId) ctx.resolver.assertCan('session:view');
 
       const fresh = stmt(ctx.db, 'sessionById').get(session.id);
@@ -160,7 +160,7 @@ export function register(router) {
       if (!isMine) ctx.resolver.assertCan('session:terminate');
 
       if (live.state !== 'active') {
-        // Already ended — possibly by the sweep above, which is the point. Returning the row is
+        // Already ended, possibly by the sweep above, which is the point. Returning the row is
         // more useful than a 409: the caller's intent ("make sure this is not running") is
         // satisfied, and the reason it stopped is in the response.
         return send(res, 200, sessionView(live, {}));
@@ -187,7 +187,7 @@ export function register(router) {
 }
 
 /**
- * The session row as the API reports it. Deliberately close to the stored row — `state`, `mode`,
+ * The session row as the API reports it. Deliberately close to the stored row, `state`, `mode`,
  * `device_id` and `end_reason` keep their column names, because `scripts/check-api.js:121-127`
  * reads them and because a session is a record whose fields should match what was written.
  */

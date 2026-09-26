@@ -1,4 +1,4 @@
-// auth.js — sign in, refresh, switch org, and "who am I".
+// auth.js, sign in, refresh, switch org, and "who am I".
 //
 // The four rules that shape this file:
 //
@@ -7,7 +7,7 @@
 //     readable by script. Nothing is written to localStorage or sessionStorage.
 //  2. `refresh_tokens` has NO org column. So a refresh cannot remember which org the user was
 //     looking at, and `POST /auth/refresh` re-issues for the caller's default org. That is a
-//     consequence of the given schema, not an oversight — see DECISIONS.md.
+//     consequence of the given schema, not an oversight, see DECISIONS.md.
 //  3. A wrong password and an unknown account produce the same 401 with the same message. The
 //     console must not improve on that either (UI-INVENTORY.md §4), and `tests/ui.spec.js:333`
 //     asserts the screen does not.
@@ -57,7 +57,7 @@ function sessionPayload(db, { user, org, role, permissions }) {
  * unconditionally, so EVERY issue started a fresh family and a family was a family of exactly one.
  * `revokeFamily` on the replay branch therefore matched the single already-revoked row and changed
  * nothing: replay detection fired, returned 401, and the attacker's rotated token kept working.
- * Verified before this fix — replay the old cookie (401, as designed) and then refresh with the
+ * Verified before this fix, replay the old cookie (401, as designed) and then refresh with the
  * new one, and you get 200. The control was inert and both my write-ups claimed it worked.
  *
  * The lesson is the assertion, not the code: I had a test for "the replay is refused" and none for
@@ -109,18 +109,18 @@ export function register(router) {
     // Rehash-on-login, and the reason the KDF cost lives inside the stored value.
     //
     // `SCRYPT_N` only affects hashes written AFTER it is set, because verification deliberately
-    // reads the cost back out of the stored hash — that is what stops a cost change from bricking
+    // reads the cost back out of the stored hash, that is what stops a cost change from bricking
     // every existing password. The cost of that safety is that lowering N appears to do nothing to
     // a database that already exists, which is a confusing thing to ship.
     //
     // This closes the gap: a successful sign-in re-derives the hash at the current cost, so a
     // deployment migrates its own password column one sign-in at a time. No downtime, no migration
-    // script, no locked-out users, and it works in both directions — raising N to harden an
+    // script, no locked-out users, and it works in both directions, raising N to harden an
     // existing install is the same three lines.
     //
     // It runs AFTER the credential is proven, on a string the caller already supplied in the clear,
     // and it is not audited: nothing about the caller's authority changed, only the encoding of a
-    // secret they already hold. A failure here is swallowed on purpose — a rehash that fails must
+    // secret they already hold. A failure here is swallowed on purpose, a rehash that fails must
     // not turn a correct password into a 500.
     if (user && needsRehash(user.password_hash)) {
       try {
@@ -201,7 +201,7 @@ export function register(router) {
 
     // Rotate INSIDE the family this token belongs to, so a replay can still reach the whole
     // lineage. `busy` if two refreshes race: the loser finds the row already revoked, which is the
-    // reuse branch above, and the family dies — which is the correct outcome for two concurrent
+    // reuse branch above, and the family dies, which is the correct outcome for two concurrent
     // uses of one refresh token.
     const rotate = ctx.db.transaction(() => {
       stmt(ctx.db, 'revokeRefresh').run(nowIso(), row.id);

@@ -3,7 +3,7 @@
 // Every error response has the same shape (PERMISSIONS.md §10):
 //   { error: { code, message, reason, requestId } }
 // Keep it identical everywhere. The "doesn't exist" and "belongs to another org"
-// responses must be indistinguishable — see PERMISSIONS.md §6.
+// responses must be indistinguishable, see PERMISSIONS.md §6.
 
 import { apiHeaders } from './headers.js';
 
@@ -38,7 +38,7 @@ export const gone = (msg = 'invite is no longer valid') => new HttpError(410, 'G
 // compares: ISO-8601 UTC ending in 'Z'.
 //
 // This matters because timestamps are TEXT and compared LEXICOGRAPHICALLY. A client that
-// sends '...+00:00' gets silently mis-ordered against '...Z' — '+' sorts before 'Z' — so an
+// sends '...+00:00' gets silently mis-ordered against '...Z', '+' sorts before 'Z', so an
 // unexpired grant would be treated as already expired. Accept-and-normalise, or reject;
 // never store a form that does not compare correctly.
 export function normalizeTs(value, field) {
@@ -62,7 +62,7 @@ export function sendError(res, err, requestId) {
   const status = err instanceof HttpError ? err.status : 500;
   const code = err instanceof HttpError ? err.code : 'INTERNAL';
 
-  // Never leak internals, and never echo request bodies — they can contain
+  // Never leak internals, and never echo request bodies, they can contain
   // stream keys and invite tokens.
   const message = err instanceof HttpError ? err.message : 'internal error';
 

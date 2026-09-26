@@ -3,7 +3,7 @@
 // Every one of them takes the same two things: the org-level resolved set (for the card's own
 // entries and its rows) and the per-device sets (for the device rows). Nothing here reads a role.
 //
-// The card definitions come from UI-INVENTORY.md §2 — including the one that looks like a mistake
+// The card definitions come from UI-INVENTORY.md §2, including the one that looks like a mistake
 // and is not: the GRANTS card is gated on `user:read`, the same as People, because `GET /grants`
 // requires `user:read` and there is no `grant:read` permission in the catalogue. An auditor
 // therefore sees the grants table and cannot change it, which is the correct reading of "read-only".
@@ -12,7 +12,7 @@ import React, { useState } from 'react';
 import * as api from '../api.js';
 import { IfAllowed, PermButton, allows, allowsAny, verdict, provenance } from '../presence.jsx';
 
-const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—');
+const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Never');
 
 // ===========================================================================
 // Devices
@@ -105,7 +105,7 @@ function DeviceRow({ orgId, device, orgs, busy, run, onError }) {
 
   return (
     // The row is governed by device:view (UI-INVENTORY §3). The row only exists at all when that
-    // permission is held, because the server omits the row otherwise — so it is always "unlocked".
+    // permission is held, because the server omits the row otherwise, so it is always "unlocked".
     <tr data-testid="device-row" data-device-id={device.id} data-kind={device.kind} data-permission="device:view" data-state="unlocked">
       <td>
         <div className="cell-name">{device.name}</div>
@@ -183,7 +183,7 @@ function DeviceRow({ orgId, device, orgs, busy, run, onError }) {
 
 /**
  * A transfer needs a destination. It used to `window.prompt` for an ORGANIZATION ID, which is
- * unusable without already knowing an id out of band — and it is also the one place a user could
+ * unusable without already knowing an id out of band, and it is also the one place a user could
  * accidentally walk into the org-existence probe. So the destination is chosen from a list the user
  * can actually see, fetched from an endpoint that is already scoped to their own orgs.
  */
@@ -205,7 +205,7 @@ function startTransfer(orgId, device, orgs) {
 }
 
 // A session needs both permissions. When the server refuses, the button was rendered from a set
-// that has since changed, so the row's provenance may be stale — but `run()` already reloads after
+// that has since changed, so the row's provenance may be stale, but `run()` already reloads after
 // every action, so this only has to SURFACE the error. It used to fetch the device list and throw
 // the result away, which was a wasted request and fired onError from two places for one failure.
 const surfaceError = (onError) => (err) => { onError(err); };
@@ -293,7 +293,7 @@ export function PeopleCard({ orgId, orgPermissions, members, onReload, onError, 
               <td>
                 {/* RolePicker gates ITSELF rather than being wrapped. `IfAllowed` attaches the
                     contract attributes by cloning its child, and cloning a composite component
-                    drops any prop that component does not forward — so wrapping RolePicker
+                    drops any prop that component does not forward, so wrapping RolePicker
                     produced a <select> with no data-permission at all. A host element is the only
                     thing cloneElement can reliably annotate. */}
                 <RolePicker
@@ -586,7 +586,7 @@ export function SessionsCard({ orgId, orgPermissions, sessions, devices, onReloa
     finally { setBusy(null); }
   };
 
-  // Only offer modes the caller can actually open ON THE CHOSEN DEVICE — the same compound check the
+  // Only offer modes the caller can actually open ON THE CHOSEN DEVICE, the same compound check the
   // server makes, computed from the per-row permissions it already sent. The server still enforces
   // it; this only avoids offering a button that is guaranteed to fail.
   const target = devices.find((d) => d.id === deviceId);
@@ -673,7 +673,7 @@ export function SessionsCard({ orgId, orgPermissions, sessions, devices, onReloa
                       the button carries the permission it was rendered for, so a hidden button here
                       is a real absence rather than a disabled control. */}
                   {/* Governed by OWNERSHIP, not by a permission (UI-INVENTORY §3: "your own
-                      session"), so it carries no data-permission — there is no permission to name.
+                      session"), so it carries no data-permission, there is no permission to name.
                       It is still gated: the server decides, and `can_stop` in the list response is
                       the server's own answer. */}
                   {s.state === 'active' && s.is_mine && (
@@ -702,7 +702,7 @@ export function SessionsCard({ orgId, orgPermissions, sessions, devices, onReloa
  * The audit log. `page` and `onPage` are lifted into `Shell` deliberately.
  *
  * This card used to own `const [page, setPage] = useState(0)` and render "page N of M" with
- * Newer/Older buttons — and `App` passed it only `events` and `total`. So clicking Older changed
+ * Newer/Older buttons, and `App` passed it only `events` and `total`. So clicking Older changed
  * the heading to "page 2 of 3" while the table still showed page 1's fifty rows, and **no request
  * was made**. A shipped control that displays a falsehood is worse than not shipping it, because
  * the user has no way to know the data did not move.
@@ -742,10 +742,10 @@ export function AuditCard({ events, total, page, onPage }) {
                   data-action={e.action}
                 >
                   <td className="cell-sub">{fmtTime(e.at)}</td>
-                  <td>{e.actor_name ?? e.actor_id ?? '—'}</td>
+                  <td>{e.actor_name ?? e.actor_id ?? 'Nobody signed in'}</td>
                   <td><code>{e.action}</code></td>
                   <td><span className={`tag tag--${e.result}`}>{e.result}</span></td>
-                  <td className="cell-sub">{e.reason_code ?? '—'}</td>
+                  <td className="cell-sub">{e.reason_code ?? 'not a refusal'}</td>
                 </tr>
               ))}
             </tbody>

@@ -16,7 +16,7 @@
 //
 //   `DELETE /v1/orgs/:org/members/me` is registered BEFORE `DELETE /v1/orgs/:org/members/:userId`.
 //   The router returns the first match, both are five segments with the same method, and `:userId`
-//   would otherwise match the literal string "me" — so leaving an organization would 404 for a
+//   would otherwise match the literal string "me", so leaving an organization would 404 for a
 //   caller who is, in fact, trying to leave. I got this wrong once and the shipped suite caught it.
 //
 // Everything else is order-independent, because `assertSameOrg` is the first line of every

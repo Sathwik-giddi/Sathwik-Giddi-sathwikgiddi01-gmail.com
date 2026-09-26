@@ -1,7 +1,7 @@
 // A deliberately tiny router. Roughly 35 lines, no dependencies, nothing hidden.
 //
 // This is provided so you don't spend hackathon time writing routing plumbing.
-// Read it once — it is the whole story of how a request becomes a handler call.
+// Read it once, it is the whole story of how a request becomes a handler call.
 
 const PARAM = /^:(.+)$/;
 
@@ -28,7 +28,7 @@ export function createRouter() {
         const param = PARAM.exec(seg);
         if (param) {
           // `decodeURIComponent` throws on a malformed escape, and this runs inside the request
-          // listener's callee — so an unguarded throw here was a 500 on a *public* route
+          // listener's callee, so an unguarded throw here was a 500 on a *public* route
           // (`GET /v1/invites/%ff` needs no token). A segment we cannot decode cannot name a real
           // resource, so the honest answer is that nothing matched: the caller gets the same 404
           // as any unknown id, and learns nothing about what does exist.

@@ -9,7 +9,7 @@
 //   - a single action produces a single row. The success row is written INSIDE the transaction
 //     that makes the change, by the route that makes it. Nothing here also logs the allow from a
 //     wrapper, because a wrapper that logs both cannot tell you which of the two actually
-//     committed — and a success row for a rolled-back transaction is worse than no row.
+//     committed, and a success row for a rolled-back transaction is worse than no row.
 //
 // `auditDenials` is the exception, and it only ever writes the *denial*: the allow, if the action
 // was permitted, is the route's to write inside its own transaction.
@@ -20,18 +20,18 @@ import { newId, nowIso } from './db.js';
 
 /**
  * Append one event. `orgId` is NOT NULL in the schema, so an event that cannot be attributed to
- * an org — a failed sign-in, a bad token — is not auditable and is not written. That is a real
+ * an org, a failed sign-in, a bad token, is not auditable and is not written. That is a real
  * limitation of the given schema rather than a choice, and it is why "someone tried to log in as
  * our admin account" is not answerable from this table.
  */
 export function audit(db, { orgId, actorId = null, action, targetType = null, targetId = null, result, reasonCode = null, requestId = null }) {
-  if (!orgId) throw new Error('audit: orgId is required — audit_events.org_id is NOT NULL');
+  if (!orgId) throw new Error('audit: orgId is required, audit_events.org_id is NOT NULL');
   if (result !== 'allow' && result !== 'deny') throw new Error(`audit: result must be allow|deny, got ${result}`);
 
   // The table below is the single source of truth for which actions exist and what they act on.
   //
   // It used to be a comment's worth of good intentions: declared, frozen, documented as "stated
-  // once, because the alternative is deciding per route and drifting" — and read by nothing. Every
+  // once, because the alternative is deciding per route and drifting", and read by nothing. Every
   // route passed its own `targetType` inline, so the map could disagree with every caller and no
   // test would notice. A map that is not consulted cannot prevent drift; it only records it.
   //
@@ -68,7 +68,7 @@ export function audit(db, { orgId, actorId = null, action, targetType = null, ta
 /**
  * Run `fn`; if it refuses, record the denial and rethrow the ORIGINAL error.
  *
- * Only 403 is audited. A 404 is not a denial — it is the deliberate absence of information, and
+ * Only 403 is audited. A 404 is not a denial, it is the deliberate absence of information, and
  * writing "someone probed org_x and got 404" into a log that `audit:read` holders can read would
  * turn the audit trail into a map of what exists. A 401 means the request never established who
  * the caller was, so there is no actor to attribute it to. A 403 is exactly the case the log
@@ -116,13 +116,13 @@ export function auditSuccess(db, ctx, meta) {
 
 /**
  * What counts as an auditable event. Stated once, because the alternative is deciding per route
- * and drifting — and this table is now actually consulted by `audit()`, so a route that invents an
+ * and drifting, and this table is now actually consulted by `audit()`, so a route that invents an
  * action is refused rather than quietly recorded:
  *
  *   - anything that CHANGES authorization state: role, status, membership, grants, devices,
  *     org settings, invites, sessions
  *   - any REFUSAL of one of those (via auditDenials)
- *   - a REFUSED read. Reads are not audited on success — `audit:read` on a hot list endpoint would
+ *   - a REFUSED read. Reads are not audited on success, `audit:read` on a hot list endpoint would
  *     make the table grow with traffic rather than with decisions, and the schema's append-only
  *     triggers mean there is no way to prune it afterwards. But a read that was REFUSED is an
  *     authorization event like any other, so those are recorded. That is why the read actions below
@@ -150,7 +150,7 @@ export const AUDITED_ACTIONS = Object.freeze({
   'session.stop': { targetType: 'session' },
   'session.terminate': { targetType: 'session' },
 
-  // Reads. Recorded only on refusal — see the note above. `targetType` is the subject the refusal
+  // Reads. Recorded only on refusal, see the note above. `targetType` is the subject the refusal
   // was about, which for a collection is the org and for a single row is the row.
   'device.list': { targetType: 'org' },
   'device.read': { targetType: 'device' },
@@ -163,7 +163,7 @@ export const AUDITED_ACTIONS = Object.freeze({
 
   // The one READ that is audited on success as well as on refusal, and it was missing from this
   // table until the table started being read. `GET /v1/orgs/:org/audit` records itself, because
-  // reading the audit log is the one read that answers "who has been watching" — and an audit trail
+  // reading the audit log is the one read that answers "who has been watching", and an audit trail
   // nobody can ask that question of is not much of a trail. It is one row per page view, not per
   // row returned, so it still does not grow with traffic.
   'audit.read': { targetType: 'org' },

@@ -139,7 +139,7 @@ check('reinstate restores access', (await call('DELETE', '/orgs/org_acme/members
 console.log('\n== D8 modification authority ==');
 check('no self role change', (await call('PATCH', '/orgs/org_acme/members/usr_dana', { token: danaAcme, body: { role: 'admin' } })).body.error.code, 'SELF_ROLE_CHANGE');
 // Acme has two owners, so demoting one is legitimate. The LAST_OWNER guard needs an org
-// with exactly one owner — a freshly created org has exactly one, its creator.
+// with exactly one owner, a freshly created org has exactly one, its creator.
 const fresh = await call('POST', '/orgs', { token: danaAcme, body: { name: 'Solo Org' } });
 check('create org makes the creator sole owner', fresh.body.role, 'owner');
 // D18: the Acme-scoped token cannot address the new org AT ALL. This 404s before any
@@ -190,6 +190,6 @@ for (const [q, expected] of [['limit=0', 400], ['limit=-1', 400], ['limit=99999'
   check(`audit?${q} -> ${expected}`, (await call('GET', `/orgs/org_acme/audit?${q}`, { token: danaAcme })).status, expected);
 }
 
-console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
+console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}, ${pass} passed, ${fail} failed\n`);
 server.kill();
 process.exit(fail === 0 ? 0 : 1);

@@ -2,7 +2,7 @@
 //
 // better-sqlite3 compiles SQL on prepare(), so a statement that is prepared per call is compiled
 // per call. Everything in this server that runs more than once per request goes through here, and
-// the compiled statements are cached per connection in a WeakMap — so the test suites, which each
+// the compiled statements are cached per connection in a WeakMap, so the test suites, which each
 // open their own throwaway database, get their own set and none of them leak into another.
 //
 // Two reasons this is a module and not a helper sprinkled through the routes:

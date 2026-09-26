@@ -2,6 +2,7 @@
 // Every case here is a vector from PERMISSIONS.md §11 or §12. Run: node scripts/check-permissions.js
 
 import { readFileSync } from 'node:fs';
+import { resolveRelativeTime } from './seedtime.js';
 import { openDatabase, nowIso, bumpPermVersion, newId } from '../server/db.js';
 import { resolve, can, assertCanStartSession } from '../server/permissions.js';
 
@@ -11,13 +12,7 @@ db.exec(readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8'));
 db.exec(readFileSync(new URL('../db/reference.sql', import.meta.url), 'utf8'));
 
 const seed = JSON.parse(readFileSync(new URL('../seed/orgs.json', import.meta.url), 'utf8'));
-const at = (offset) => {
-  if (!offset) return null;
-  const m = /^([+-])(\d+)([dhm])$/.exec(offset);
-  if (!m) return offset;
-  const mult = { d: 864e5, h: 36e5, m: 6e4 }[m[3]];
-  return new Date(Date.now() + (m[1] === '-' ? -1 : 1) * Number(m[2]) * mult).toISOString();
-};
+const at = (v) => resolveRelativeTime(v);
 
 for (const o of seed.organizations)
   db.prepare('INSERT INTO organizations (id,name,theme,max_session_minutes) VALUES (?,?,?,?)')
@@ -52,28 +47,28 @@ const reason = (userId, orgId, permission, deviceId = null) =>
 
 const A = 'org_acme', G = 'org_globex';
 
-console.log('\n== PERMISSIONS.md §3 — role baselines ==');
+console.log('\n== PERMISSIONS.md §3, role baselines ==');
 check('owner: device:control', effect('usr_acme_owner', A, 'device:control'), 'allow');
 check('admin: org:delete DENIED', effect('usr_acme_admin', A, 'org:delete'), 'deny');
 check('viewer: device:control denied', effect('usr_acme_viewer', A, 'device:control'), 'deny');
 check('viewer: device:control reason=implicit', reason('usr_acme_viewer', A, 'device:control'), 'implicit');
 
-console.log('\n== §3 — auditor/operator are NOT ordered (D2) ==');
+console.log('\n== §3, auditor/operator are NOT ordered (D2) ==');
 check('auditor(sam@globex): audit:read  ALLOW', effect('usr_sam', G, 'audit:read'), 'allow');
 check('auditor(sam@globex): device:control DENY', effect('usr_sam', G, 'device:control'), 'deny');
 check('operator(sam@acme):  audit:read  DENY', effect('usr_sam', A, 'audit:read'), 'deny');
 check('operator(sam@acme):  device:control ALLOW', effect('usr_sam', A, 'device:control'), 'allow');
 
-console.log('\n== §11 vector 3 — a grant is device-scoped (D6) ==');
+console.log('\n== §11 vector 3, a grant is device-scoped (D6) ==');
 check('viewer: session:start on lab-mac-01', effect('usr_acme_viewer', A, 'session:start', 'dev_lab_mac_01'), 'allow');
 check('viewer: session:start on qa-android-01', effect('usr_acme_viewer', A, 'session:start', 'dev_qa_android_01'), 'deny');
 
-console.log('\n== §11 vector 4/5 — device-scoped deny (D1) ==');
+console.log('\n== §11 vector 4/5, device-scoped deny (D1) ==');
 check('viewer: device:view on kiosk-lobby-01', effect('usr_acme_viewer', A, 'device:view', 'dev_kiosk_lobby_01'), 'deny');
 check('viewer: device:view reason=explicit_deny', reason('usr_acme_viewer', A, 'device:view', 'dev_kiosk_lobby_01'), 'explicit_deny');
 check('viewer: device:view on lab-win-01', effect('usr_acme_viewer', A, 'device:view', 'dev_lab_win_01'), 'allow');
 
-console.log('\n== §11 vector 7 — org-wide DENY beats the role baseline (D1) ==');
+console.log('\n== §11 vector 7, org-wide DENY beats the role baseline (D1) ==');
 check('operator(sam): device:terminal on build-server-01', effect('usr_sam', A, 'device:terminal', 'dev_build_server_01'), 'deny');
 check('operator(sam): device:terminal on lab-win-01', effect('usr_sam', A, 'device:terminal', 'dev_lab_win_01'), 'deny');
 check('operator(sam): device:control still ALLOW', effect('usr_sam', A, 'device:control', 'dev_lab_win_01'), 'allow');
@@ -84,18 +79,18 @@ db.prepare('INSERT INTO grants (id,org_id,user_id,device_id,effect,created_by) V
 db.prepare('INSERT INTO grant_permissions (grant_id,permission) VALUES (?,?)').run('g_carve', 'device:terminal');
 check('device-scoped ALLOW does NOT carve out org-wide DENY', effect('usr_sam', A, 'device:terminal', 'dev_lab_win_01'), 'deny');
 
-console.log('\n== §7 — multi-org: same user, different role per org ==');
+console.log('\n== §7, multi-org: same user, different role per org ==');
 check('dana: org:delete in Acme (owner)', effect('usr_dana', A, 'org:delete'), 'allow');
 check('dana: org:delete in Globex (viewer)', effect('usr_dana', G, 'org:delete'), 'deny');
 check('dana: device:control on globex-desk-01 (grant)', effect('usr_dana', G, 'device:control', 'dev_globex_desk_01'), 'allow');
 check('dana: device:control on globex-kiosk-02', effect('usr_dana', G, 'device:control', 'dev_globex_kiosk_02'), 'deny');
 
-console.log('\n== §6 — cross-org is invisible: no membership means total deny ==');
+console.log('\n== §6, cross-org is invisible: no membership means total deny ==');
 check('dana has no membership in org_nope', resolve(db, { userId: 'usr_dana', orgId: 'org_nope' }).role, null);
 check('  ...every permission denied', effect('usr_dana', 'org_nope', 'device:list'), 'deny');
 check('  ...reason=not_a_member', reason('usr_dana', 'org_nope', 'device:list'), 'not_a_member');
 
-console.log('\n== D7 — half-open time window ==');
+console.log('\n== D7, half-open time window ==');
 const past = new Date(Date.now() - 1000).toISOString();
 const future = new Date(Date.now() + 3600_000).toISOString();
 db.prepare('INSERT INTO grants (id,org_id,user_id,device_id,effect,expires_at,created_by) VALUES (?,?,?,?,?,?,?)')
@@ -116,17 +111,17 @@ check('device:* allows device:control', effect('usr_acme_viewer', A, 'device:con
 check('device:* does NOT allow session:start', effect('usr_acme_viewer', A, 'session:start', 'dev_lab_win_01'), 'deny');
 check('device:* does NOT allow audit:read', effect('usr_acme_viewer', A, 'audit:read'), 'deny');
 
-console.log('\n== §9 — compound session check ==');
+console.log('\n== §9, compound session check ==');
 const ctx = { userId: 'usr_acme_viewer', orgId: A };
 check('viewer: view session on lab-mac-01 (start+view)', (() => { try { assertCanStartSession(db, ctx, 'view', 'dev_lab_mac_01'); return 'ok'; } catch (e) { return e.reason; } })(), 'ok');
 check('viewer: control session on lab-mac-01 -> missing_device_permission', (() => { try { assertCanStartSession(db, ctx, 'control', 'dev_lab_mac_01'); return 'ok'; } catch (e) { return e.reason; } })(), 'missing_device_permission');
 check('viewer: view session on qa-android-01 -> missing_permission', (() => { try { assertCanStartSession(db, ctx, 'view', 'dev_qa_android_01'); return 'ok'; } catch (e) { return e.reason; } })(), 'missing_permission');
 
-console.log('\n== §7 — suspended membership yields an empty permission set ==');
+console.log('\n== §7, suspended membership yields an empty permission set ==');
 db.prepare("UPDATE memberships SET status='suspended', perm_version = perm_version + 1 WHERE org_id=? AND user_id=?").run(A, 'usr_acme_viewer');
 check('suspended: device:list denied', effect('usr_acme_viewer', A, 'device:list'), 'deny');
 check('suspended: reason=suspended', reason('usr_acme_viewer', A, 'device:list'), 'suspended');
 check('suspended: device:view denied on every device', effect('usr_acme_viewer', A, 'device:view', 'dev_lab_mac_01'), 'deny');
 
-console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
+console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}, ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

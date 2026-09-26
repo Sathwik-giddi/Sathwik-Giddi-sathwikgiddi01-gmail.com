@@ -19,7 +19,7 @@
 //      absence, and a probe that cannot distinguish "absent" from "not looked at" is not run.
 //
 // Exit code 1 if any CRITICAL or HIGH finding is open. Findings that are accepted risks are
-// recorded as such and do not fail the run — but they are printed either way.
+// recorded as such and do not fail the run, but they are printed either way.
 
 import { spawn, execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
@@ -76,10 +76,10 @@ let mark = { pass: 0, fail: 0 };
 const section = (t) => { mark = { pass, fail }; console.log(`\n== ${t} ==`); };
 const verdict = (n, why) => {
   const state = fail === mark.fail ? 'clean' : 'FINDING';
-  console.log(`  ${state === 'clean' ? 'ok  ' : 'FAIL '} ${String(n).padStart(2)}. ${state === 'clean' ? 'clean' : 'FINDING'} — ${why}`);
+  console.log(`  ${state === 'clean' ? 'ok  ' : 'FAIL '} ${String(n).padStart(2)}. ${state === 'clean' ? 'clean' : 'FINDING'}, ${why}`);
   if (state !== 'clean') findings.push(`vulnerability ${n}`);
 };
-const na = (n, why) => console.log(`   na  ${String(n).padStart(2)}. n/a      — ${why}`);
+const na = (n, why) => console.log(`   na  ${String(n).padStart(2)}. n/a     , ${why}`);
 
 async function call(method, path, { token, body, headers = {} } = {}) {
   const h = { ...headers };
@@ -186,7 +186,7 @@ section('2. Unprotected API routes / no auth middleware');
   const norm = (p) => p.replace(/:[A-Za-z_]\w*/g, 'probe');
   // Both sides go through norm(). PUBLIC_ROUTES is written with `:token` and the registered route
   // is read with `:token` too, but normalising only one side turns a matching pair into a mismatch
-  // and reports a phantom finding — which is what the first version of this block did.
+  // and reports a phantom finding, which is what the first version of this block did.
   const publicKeys = new Set([...publicSet].map(norm));
   const declaredPublic = new Set(publicRoutes.map((r) => `${r.method} ${norm(r.path)}`));
   check('every PUBLIC_ROUTES entry matches a registered route', [...publicKeys].filter((k) => !declaredPublic.has(k)), []);
@@ -220,7 +220,7 @@ section('3. Committed or publicly served secrets');
   //
   // This scanner is excluded from its own scan, and it has to be: the patterns have to be written
   // down literally somewhere, and the only sensible place is the file that looks for them. The
-  // first run flagged `scripts/audit.js: /pk_live_/` — a true positive about the file, a false
+  // first run flagged `scripts/audit.js: /pk_live_/`, a true positive about the file, a false
   // positive about the repository, and precisely the kind of noise that trains a reader to skip a
   // scanner's output.
   const PATTERNS = SECRET_SHAPES;
@@ -245,7 +245,7 @@ section('3. Committed or publicly served secrets');
 section('4. Broken access control (IDOR)');
 {
   // The real test: a valid token from org A against org B's resources, and against ids that do not
-  // exist. 404 for both — a 403 or a 200 would confirm the resource exists.
+  // exist. 404 for both, a 403 or a 200 would confirm the resource exists.
   const cases = [
     ['GET', '/v1/orgs/org_globex/members', null],
     ['GET', '/v1/orgs/org_globex/audit', null],
@@ -274,7 +274,7 @@ section('4. Broken access control (IDOR)');
 
   // Sessions are the classic IDOR: the id is global, not org-scoped in the path, so the route has
   // to do the scoping itself. A real session is started in globex first, because probing a made-up
-  // id only proves the 404 branch and never the one that matters — a session that genuinely exists
+  // id only proves the 404 branch and never the one that matters, a session that genuinely exists
   // in another tenant.
   const started = await call('POST', '/v1/orgs/org_globex/sessions', {
     token: globexOwner, body: { deviceId: 'dev_globex_desk_01', mode: 'control' },
@@ -286,7 +286,7 @@ section('4. Broken access control (IDOR)');
     check("another org's session id is not readable", cross.status, 404);
     const crossKill = await call('DELETE', `/v1/sessions/${sesId}`, { token: acmeOwner });
     check("another org's session cannot be terminated", crossKill.status, 404);
-    // And it must still be alive afterwards — a 404 that ended it anyway would be a write.
+    // And it must still be alive afterwards, a 404 that ended it anyway would be a write.
     const stillThere = await call('GET', `/v1/sessions/${sesId}`, { token: globexOwner });
     check('the foreign session is untouched after the attempt', stillThere.status, 200);
   } else {
@@ -396,7 +396,7 @@ section('9. Wildcard CORS');
   const serverFiles = ['index.js', 'http.js', 'headers.js', 'routes/auth.js'];
   const corsCode = serverFiles.flatMap((f) => readFileSync(new URL(`../server/${f}`, import.meta.url), 'utf8')).filter((s) => /Access-Control-Allow-Origin/.test(s));
   check('the literal is not written anywhere in the server', corsCode.length, 0);
-  verdict(9, 'no CORS headers at all — strictly narrower than same-origin, so nothing to misconfigure');
+  verdict(9, 'no CORS headers at all, strictly narrower than same-origin, so nothing to misconfigure');
 }
 
 // ===========================================================================
@@ -420,7 +420,7 @@ section('10. Rate limiting');
   check('the 429 reveals nothing about whether the account exists', limited.body?.error?.message, 'too many attempts; try again shortly');
 
   // And success clears the counter, so a real person who fumbles twice is not punished.
-  console.log('         (a correct password clears the counter — asserted in check-hardening.js)');
+  console.log('         (a correct password clears the counter, asserted in check-hardening.js)');
   verdict(10, 'per-credential failure throttling on the unauthenticated expensive routes');
 }
 
@@ -510,7 +510,7 @@ section('13. Unverified Stripe webhooks');
   const money = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).filter((d) => /stripe|paypal|braintree|adyen/i.test(d));
   check('no payment SDK is installed', money, []);
   // If a payment route ever appears, this audit must fail loudly rather than keep reporting n/a.
-  na(13, 'no payment feature exists — nothing to verify a webhook signature for. Re-run this if a billing route is ever added.');
+  na(13, 'no payment feature exists, nothing to verify a webhook signature for. Re-run this if a billing route is ever added.');
 }
 
 // ===========================================================================
@@ -542,7 +542,7 @@ section('15. Verbose errors and exposed debug / API-docs endpoints');
   check('no debug, docs or metrics route exists', debugRoutes.map((r) => `${r.method} ${r.path}`), []);
 
   // The error envelope must be identical for every class of failure, with no stack and no echo of
-  // the request body — a body can carry a stream key or an invite token.
+  // the request body, a body can carry a stream key or an invite token.
   const envelope = (r) => Object.keys(r.body?.error ?? {}).sort();
   const e400 = await call('GET', '/v1/orgs/org_acme/audit?limit=abc', { token: acmeOwner });
   const e404 = await call('GET', '/v1/orgs/org_acme/nope', { token: acmeOwner });
@@ -645,7 +645,7 @@ section('17. Hallucinated packages (slopsquatting)');
   const declared = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
   console.log(`         ${declared.length} declared: ${declared.join(', ')}`);
 
-  // Every declared name must resolve to a package whose own name matches — the slopsquat signature
+  // Every declared name must resolve to a package whose own name matches, the slopsquat signature
   // is a real package with a lookalike name, so the check is name identity, not just existence.
   const mismatched = [];
   for (const d of declared) {
@@ -721,11 +721,11 @@ section('event-loop responsiveness under password-hash load');
 
   // `worst stall` is only meaningful if the timer managed to run at all. With a synchronous KDF it
   // fires zero times, so `worst` stays 0 and a bare `worst < 100` would report "ok" for a loop that
-  // never ran — a green line describing the opposite of what happened. Guarded on ticks > 0.
+  // never ran, a green line describing the opposite of what happened. Guarded on ticks > 0.
   if (ticks > 0) {
     check('and when it does run, the loop is never blocked for more than 100ms', worst < 100, true);
   } else {
-    console.log('         (the timer never fired at all — the loop was starved for the whole burst)');
+    console.log('         (the timer never fired at all, the loop was starved for the whole burst)');
     check('the loop was not starved', false, true);
   }
 }
@@ -738,7 +738,7 @@ section('latency budget, measured over real HTTP');
 // rather than asserted, because a budget nobody measures is a wish.
 //
 // The two classes get separate budgets for a reason. `POST /auth/login` pays ~36ms of scrypt on
-// purpose — that is the cost of not being brute-forceable offline — so it is given its own ceiling
+// purpose, that is the cost of not being brute-forceable offline, so it is given its own ceiling
 // and its own regression test. Everything else should be single-digit milliseconds, and a budget
 // that let the list endpoints drift up to 200ms would permit a 100x regression and still pass.
 {
@@ -795,7 +795,7 @@ section('latency budget, measured over real HTTP');
     scaled.push(Date.now() - t);
   }
   const worst = Math.max(...scaled);
-  console.log(`         device list (${devices} devices, ${worst}ms worst of 8) — must not scale with row count`);
+  console.log(`         device list (${devices} devices, ${worst}ms worst of 8), must not scale with row count`);
   check('the device list stays inside its budget', worst < BUDGET.read, true);
 }
 
@@ -831,7 +831,7 @@ section('the pepper: a stolen database is not a cracked database');
   const bare = bench(() => scryptSync(absorb('demo1234', ''), salt, 64, opts));
   const peppered = bench(() => scryptSync(absorb('demo1234', real), salt, 64, opts));
   const overhead = ((peppered / bare) - 1) * 100;
-  console.log(`         scrypt ${bare.toFixed(1)}ms bare, ${peppered.toFixed(1)}ms peppered — ${overhead >= 0 ? '+' : ''}${overhead.toFixed(1)}% overhead`);
+  console.log(`         scrypt ${bare.toFixed(1)}ms bare, ${peppered.toFixed(1)}ms peppered, ${overhead >= 0 ? '+' : ''}${overhead.toFixed(1)}% overhead`);
   check('the pepper costs under 5% of the derivation', overhead < 5, true);
 
   // It has to be required, or it is a control that is off by default and nobody notices.
@@ -870,7 +870,7 @@ section('audit coverage: every action a route can emit is a declared action');
   // and an object shorthand (`{ action, targetType: … }`). Scraping by shape is what produced three
   // false "never emitted" findings on the first run, and a check that cries wolf gets ignored.
   //
-  // The cost of scraping every literal is two false positives — `devices.length` and
+  // The cost of scraping every literal is two false positives, `devices.length` and
   // `organizations.name`, which are SQL column references in inline queries. Both are excluded by
   // an explicit list rather than a clever pattern, because a NEW column reference should make this
   // check fail and be added here, not be silently absorbed by a heuristic.
@@ -905,7 +905,7 @@ section('audit coverage: every action a route can emit is a declared action');
 
 
 cleanup();
-console.log(`\n${fail === 0 ? 'AUDIT CLEAN' : `${fail} FINDING(S)`} — ${pass} passed, ${fail} failed\n`);
+console.log(`\n${fail === 0 ? 'AUDIT CLEAN' : `${fail} FINDING(S)`}, ${pass} passed, ${fail} failed\n`);
 if (findings.length) {
   console.log('open:');
   for (const f of findings) console.log(`  - ${f}`);

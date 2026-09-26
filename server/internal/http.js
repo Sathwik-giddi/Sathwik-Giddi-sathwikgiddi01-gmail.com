@@ -1,5 +1,5 @@
 // Small helpers shared by more than one route. Anything that is a RULE lives in permissions.js,
-// lifecycle.js or audit.js instead — this file is plumbing only.
+// lifecycle.js or audit.js instead, this file is plumbing only.
 
 import { badRequest, forbidden } from '../http.js';
 import { stmt } from './sql.js';
@@ -22,7 +22,7 @@ export function parseCookies(req) {
     if (name.length === 0) continue;
 
     // A cookie value is attacker-controlled and `decodeURIComponent` throws on a malformed escape
-    // — `Cookie: rt=%` was enough. This parser runs on `POST /v1/auth/refresh`, which is PUBLIC and
+    //, `Cookie: rt=%` was enough. This parser runs on `POST /v1/auth/refresh`, which is PUBLIC and
     // which the console calls on every single page load, so an unguarded throw there meant one
     // stray percent sign anywhere on the origin bricked the boot path with a 500.
     //
@@ -45,7 +45,7 @@ export const REFRESH_COOKIE = 'rt';
 /**
  * `Secure` is set from the transport, not from NODE_ENV. The Playwright config runs the
  * production server over http://localhost, and a browser drops a `Secure` cookie received over
- * plain http — so keying this off NODE_ENV would silently break "a reload restores the session
+ * plain http, so keying this off NODE_ENV would silently break "a reload restores the session
  * from the refresh cookie" and nothing would say why. Behind a TLS-terminating proxy the
  * forwarded protocol is the honest signal.
  */
@@ -103,7 +103,7 @@ export function requireString(value, field, { max = LIMITS.name, min = 1 } = {})
 }
 
 /**
- * Email: trimmed, lowercased, and shape-checked. The lowercase is not cosmetic — `users.email`
+ * Email: trimmed, lowercased, and shape-checked. The lowercase is not cosmetic, `users.email`
  * and `invites.email` both carry `CHECK (email = lower(email) COLLATE BINARY)`, so an un-lowered
  * insert is a database error rather than a validation message. Normalising here turns a 500 into
  * a 400 and puts the rule in one place.
@@ -146,7 +146,7 @@ export function boundedInt(params, name, { min, max, fallback }) {
  *
  * A LIMITATION worth stating, because I got it wrong first: better-sqlite3 reports a foreign key
  * violation as the bare string `FOREIGN KEY constraint failed`. It does not name the table or the
- * column, so there is no way to tell from the error whether `grant_permissions.permission` (D19 —
+ * column, so there is no way to tell from the error whether `grant_permissions.permission` (D19,
  * a typo) or `grant_permissions.grant_id` (a bug in my route) caused it. I initially matched on
  * the message text, which can therefore never match, and every unknown-permission grant came back
  * as a 500. `unknownPermission()` below does the identification properly: the FK has already

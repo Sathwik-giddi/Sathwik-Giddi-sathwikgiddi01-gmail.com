@@ -1,4 +1,4 @@
-// orgs.js — organizations, members, effective permissions, and the audit log.
+// orgs.js, organizations, members, effective permissions, and the audit log.
 //
 // The ordering inside every handler here is the same and it is the whole point of the file:
 //
@@ -39,7 +39,7 @@ export function register(router) {
 
   // Creating an org needs no org-scoped permission: there is no org yet to hold one. What it does
   // need is a transaction, because an org without an owner membership is an org nobody can
-  // administer — and `assertNotLastOwner` would then refuse every future fix.
+  // administer, and `assertNotLastOwner` would then refuse every future fix.
   router.post('/v1/orgs', async (ctx, _params, res) => {
     const name = requireString(ctx.body.name, 'name', { max: LIMITS.name });
     const requested = typeof ctx.body.theme === 'string' ? ctx.body.theme : null;
@@ -96,7 +96,7 @@ export function register(router) {
   });
 
   // Soft delete. The org row survives so the audit log that references it still resolves, and
-  // `organizations.deleted_at` is what stops the org being addressed by a live token — the
+  // `organizations.deleted_at` is what stops the org being addressed by a live token, the
   // membership lookup in context.js joins on `deleted_at IS NULL`, so every token for every former
   // member starts failing with a 401 the moment this commits.
   router.delete('/v1/orgs/:org', async (ctx, params, res) => {
@@ -139,8 +139,8 @@ export function register(router) {
   router.get('/v1/orgs/:org/users/:userId/effective', async (ctx, params, res) => {
     assertSameOrg(ctx, params.org);
     return auditDenials(ctx.db, ctx, { action: 'user.effective.read', targetType: 'user', targetId: params.userId }, () => {
-      // "user:read, or self". Self is not a shortcut past the org boundary — assertSameOrg has
-      // already run — it is just a person being able to see their own resolved set, which is how
+      // "user:read, or self". Self is not a shortcut past the org boundary, assertSameOrg has
+      // already run, it is just a person being able to see their own resolved set, which is how
       // the console explains a lock to someone who cannot see the People card at all.
       if (params.userId !== ctx.userId) ctx.resolver.assertCan('user:read');
 
@@ -163,7 +163,7 @@ export function register(router) {
       if (params.userId === ctx.userId) throw selfRoleChange();
 
       // `membershipByOrgUser` ignores status, so this used to accept a REMOVED membership and
-      // stage a role on it — authority pre-loaded for a person who is not in the org, waiting for
+      // stage a role on it, authority pre-loaded for a person who is not in the org, waiting for
       // whoever reinstates them. Only an active or suspended membership is addressable here.
       const target = stmt(ctx.db, 'membershipByOrgUser').get(params.org, params.userId);
       if (!target || target.status === 'removed') throw notFound();
@@ -181,7 +181,7 @@ export function register(router) {
       apply();
 
       // The bumped perm_version is what makes the change visible on the NEXT request. The session
-      // in flight is deliberately untouched — see endActiveSessions, which is not called here.
+      // in flight is deliberately untouched, see endActiveSessions, which is not called here.
       const updated = stmt(ctx.db, 'membershipByOrgUser').get(params.org, params.userId);
       return send(res, 200, { user_id: updated.user_id, role: updated.role, perm_version: updated.perm_version });
     });
@@ -201,7 +201,7 @@ export function register(router) {
       if (!target) throw notFound();
 
       // Rank applies here too. It was missing, and the omission was invisible until an audit
-      // pointed at it: an `admin` could SUSPEND the org owner — while changing that same owner's
+      // pointed at it: an `admin` could SUSPEND the org owner, while changing that same owner's
       // ROLE correctly returned 403 from the route above. Two answers to one question. Verified
       // before the fix: admin POST .../members/usr_dana/suspend -> 200, and the owner's live
       // sessions ended with `user_suspended`. `PERMISSIONS.md §6` is about modifying a user, not
@@ -211,11 +211,11 @@ export function register(router) {
 
       // Reinstatement revives a SUSPENDED membership and nothing else. Writing 'active'
       // unconditionally meant a `removed` membership could be walked back in with no invite, no
-      // role re-check, and — because grants hang off (org, user) — every grant they had before
+      // role re-check, and, because grants hang off (org, user), every grant they had before
       // they left, including the ones that were put there to stop them. Removal is not a pause
       // (D15); the only way back is an invite, which is the only way in (D14).
       if (!suspended && target.status === 'removed') {
-        throw conflict('this person was removed, not suspended — invite them back', 'ALREADY_REMOVED');
+        throw conflict('This person was removed, not suspended. Invite them back.', 'ALREADY_REMOVED');
       }
       if (!suspended && target.status === 'invited') {
         throw conflict('this invite has not been accepted yet', 'NOT_A_MEMBER');
@@ -223,7 +223,7 @@ export function register(router) {
 
       if (target.role === 'owner') assertNotLastOwner(ctx.db, params.org, params.userId);
 
-      // Suspension CASCADES to live sessions (D16 / D20) — it is an account event, not a
+      // Suspension CASCADES to live sessions (D16 / D20), it is an account event, not a
       // permission tweak. Reinstatement does not resurrect them; a session is a record of
       // something that happened, and re-creating it would be a lie.
       const apply = ctx.db.transaction(() => {

@@ -42,7 +42,7 @@ export function App() {
   // unauthenticated visitor never sees the shell, which is also what keeps the org name out of the
   // page for `tests/ui.spec.js:308`.
   const path = window.location.pathname;
-  // `decodeURIComponent` throws on a malformed escape, and this runs during render — so `/invite/%ff`
+  // `decodeURIComponent` throws on a malformed escape, and this runs during render, so `/invite/%ff`
   // would blank the page instead of showing the same "this link did not work" every other bad
   // token gets. An undecodable token is simply a token the server will refuse, so treat it as one.
   const inviteToken = (() => {
@@ -59,11 +59,11 @@ export function App() {
 
   // /v1/auth/me failing during boot must not strand the page on "Restoring your session…".
   // `setBooting(false)` was only reached if `loadMe()` resolved, so one failed request left the
-  // console hanging with no shell and no reason — which is the one state BRIEF.md §3.2(5) calls
+  // console hanging with no shell and no reason, which is the one state BRIEF.md §3.2(5) calls
   // indistinguishable from a broken app.
   const [bootError, setBootError] = useState(null);
 
-  // A reload has no access token — there is nothing in web storage to restore one from. The
+  // A reload has no access token, there is nothing in web storage to restore one from. The
   // httpOnly refresh cookie is sent by the browser automatically, so one POST rebuilds the session.
   useEffect(() => {
     let live = true;
@@ -105,7 +105,7 @@ export function App() {
   }
 
   async function signOut() {
-    // The local sign-out happens either way — the access token is dropped and the shell unmounts.
+    // The local sign-out happens either way, the access token is dropped and the shell unmounts.
     // But the server call is NOT swallowed: if the refresh cookie survives, a reload signs the
     // person straight back in, and a sign-out that silently fails is the one failure mode a user
     // cannot detect. If it fails, say so on the gate.
@@ -128,7 +128,7 @@ export function App() {
         <div className="gate__split">
         <section className="gate__premise">
           <p className="gate__eyebrow">RemoteOps</p>
-          <h1 className="gate__claim">Know who can do what — and why.</h1>
+          <h1 className="gate__claim">Know who can do what, and why.</h1>
         </section>
         <div className="gate__panel">
           <div>
@@ -162,7 +162,7 @@ function Shell({ me, onReload, onSignOut }) {
   const [error, setError] = useState(null);
   const [switching, setSwitching] = useState(false);
 
-  // Reference data — the permission catalogue and the role list — fetched ONCE for the whole
+  // Reference data, the permission catalogue and the role list, fetched ONCE for the whole
   // console and threaded down. It used to be fetched independently by each RolePicker (one per
   // member row) and again by the grants card, so the request count grew with the number of members
   // and each response carried the full catalogue. See the note on RolePicker.
@@ -181,7 +181,7 @@ function Shell({ me, onReload, onSignOut }) {
   const permissions = useMemo(() => me?.permissions ?? {}, [me]);
 
   // Everything from the previous organization goes at once, on every org change. Not a filter, a
-  // reset — which is why org A's device ids cannot survive into org B's DOM.
+  // reset, which is why org A's device ids cannot survive into org B's DOM.
   //
   // `load` is a dependency, so this also collapses the duplicate fetch an org switch used to make:
   // the reset and the load both ran in the same commit, `load()` fired once with the PREVIOUS
@@ -196,7 +196,7 @@ function Shell({ me, onReload, onSignOut }) {
   }, [orgId]);
 
   // Fetch the active view. Re-runs whenever the view OR the org changes, so a nav click is always a
-  // refetch — which is what `tests/ui.spec.js:139` relies on when it rewrites the devices response
+  // refetch, which is what `tests/ui.spec.js:139` relies on when it rewrites the devices response
   // and clicks away and back.
   const load = useCallback(async () => {
     setError(null);
@@ -211,7 +211,7 @@ function Shell({ me, onReload, onSignOut }) {
         setData((d) => ({ ...d, members }));
       } else if (view === 'grants') {
         // The grants table needs the member and device lists to render its form's pickers. That is
-        // two extra requests on entering this view — not per row — and the card is only reachable
+        // two extra requests on entering this view, not per row, and the card is only reachable
         // by someone who already holds user:read, so both are permitted.
         const [grants, members, devices] = await Promise.all([
           api.listGrants(orgId), api.listMembers(orgId), api.listDevices(orgId),
@@ -219,7 +219,7 @@ function Shell({ me, onReload, onSignOut }) {
         setData((d) => ({ ...d, grants: grants.grants, members: members.members, devices: devices.devices }));
       } else if (view === 'sessions') {
         const { sessions } = await api.listSessions(orgId);
-        // The start-a-session form needs devices, and listing devices needs device:list — which an
+        // The start-a-session form needs devices, and listing devices needs device:list, which an
         // auditor does not hold. Rather than pre-judging that from the permission set, the console
         // asks and treats a 403 as "no device list here". Asking is one request either way, it
         // keeps `load` independent of the session object (so a mutation cannot trigger a second

@@ -2,7 +2,7 @@ import React, { cloneElement, isValidElement } from 'react';
 // The presence primitives.
 //
 // This file is the whole of the console's permission model, and it is four functions long on
-// purpose. There is no role-to-permission table anywhere under web/ — the server resolved
+// purpose. There is no role-to-permission table anywhere under web/, the server resolved
 // everything and sent it, and these helpers only decide whether to render.
 //
 // The rule (UI-INVENTORY.md §1, BRIEF.md §5.3): an element is PRESENT with data-state="unlocked",
@@ -23,14 +23,14 @@ export const allowsAny = (permissions, keys) => keys.some((k) => allows(permissi
 export const verdict = (permissions, key) => permissions?.[key] ?? null;
 
 /**
- * Render `children` only when the permission is held. This is the presence rule in one place —
+ * Render `children` only when the permission is held. This is the presence rule in one place,
  * every permission-gated element in the console goes through it, so there is exactly one place to
  * look when asking "why is this button here?".
  *
  * It also ATTACHES the two contract attributes to whatever it renders, by cloning the child. That
  * is not tidiness: `UI-INVENTORY.md §1` requires a rendered gated element to carry
  * `data-permission` and `data-state="unlocked"`, and I had written eight of them that were
- * correctly present-or-absent and carried neither attribute — the presence was right and the
+ * correctly present-or-absent and carried neither attribute, the presence was right and the
  * contract was not, which is the half of the rule nobody notices is missing. Making the helper do
  * it means a ninth cannot be added without them.
  *
@@ -52,8 +52,8 @@ export function IfAllowed({ permissions, permission, anyOf, children }) {
 }
 
 /**
- * A permission-gated control. Carries the two attributes the tests read —
- * `data-permission` and `data-state="unlocked"` — plus `data-source`, which is mine: it is how a
+ * A permission-gated control. Carries the two attributes the tests read,
+ * `data-permission` and `data-state="unlocked"`, plus `data-source`, which is mine: it is how a
  * rendered button explains where its authority came from, so "Control" on a viewer's row can say
  * `granted by grt_dana_control_one_device` rather than looking identical to an owner's.
  *
