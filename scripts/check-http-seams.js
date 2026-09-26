@@ -662,6 +662,98 @@ console.log('\n== the refresh lineage, and sign-out, must have CONSEQUENCES ==')
   check('  ...including a token rotated out of the same family', (await call('POST', '/auth/refresh', { headers: { cookie: s2.cookie } })).status, 401);
 }
 
+// =============================================================================
+console.log('\n== modification authority is the same rule on every verb ==');
+{
+  // The rank rule (PERMISSIONS.md §6) is about MODIFYING a user, not about a particular verb. It
+  // was enforced on the role-change route and missing from suspend/reinstate, so one admin got two
+  // different answers to the same question about the same target.
+  const owner = (await call('POST', '/auth/login', { body: { email: 'owner@acme.test', password: 'demo1234' } })).body.token;
+  const adminTok = (await call('POST', '/auth/login', { body: { email: 'admin@acme.test', password: 'demo1234' } })).body.token;
+  const adminA = (await call('POST', '/auth/token', { token: adminTok, body: { orgId: A } })).body.token;
+
+  // A fresh org so the two-owner case does not muddy it.
+  const org = await call('POST', '/orgs', { token: owner, body: { name: 'Rank Tests' } });
+  const R = org.body.id;
+  const ownerR = (await call('POST', '/auth/token', { token: owner, body: { orgId: R } })).body.token;
+  const inv = await call('POST', `/orgs/${R}/invites`, { token: ownerR, body: { email: 'deputy@example.test', role: 'admin' } });
+  await call('POST', `/invites/${inv.body.inviteToken}/accept`, { body: { name: 'Deputy', password: 'password123' } });
+  const deputy = (await call('POST', '/auth/token', { token: await login('deputy@example.test', 'password123'), body: { orgId: R } })).body.token;
+  // The TARGET is the owner, not the deputy: my first version read the id out of the deputy's own
+  // /auth/me and so spent the self-suspend guard (400) instead of testing the rank rule at all.
+  const roster = await call('GET', `/orgs/${R}/members`, { token: deputy });
+  const ownerRow = roster.body.members.find((m) => m.email === 'owner@acme.test');
+
+  // An admin suspending the OWNER: must be 403, the same as an admin changing the owner's role.
+  const susp = await call('POST', `/orgs/${R}/members/${ownerRow.user_id}/suspend`, { token: deputy });
+  check('an admin cannot suspend the owner', [susp.status, susp.code], [403, 'FORBIDDEN']);
+  const role = await call('PATCH', `/orgs/${R}/members/${ownerRow.user_id}`, { token: deputy, body: { role: 'viewer' } });
+  check('  ...and the same admin cannot change the owner\'s role either', [role.status, role.code], [403, 'FORBIDDEN']);
+  check('  ...so both verbs agree', [susp.status, role.status], [403, 403]);
+  check('the owner is untouched', (await call('GET', '/auth/me', { token: ownerR })).status, 200);
+
+  // An admin CAN still suspend someone below them.
+  const inv2 = await call('POST', `/orgs/${R}/invites`, { token: ownerR, body: { email: 'junior@example.test', role: 'viewer' } });
+  await call('POST', `/invites/${inv2.body.inviteToken}/accept`, { body: { name: 'Junior', password: 'password123' } });
+  const members = await call('GET', `/orgs/${R}/members`, { token: deputy });
+  const junior = members.body.members.find((m) => m.email === 'junior@example.test');
+  check('an admin can still suspend a viewer', (await call('POST', `/orgs/${R}/members/${junior.user_id}/suspend`, { token: deputy })).status, 200);
+  check('  ...and reinstate them', (await call('DELETE', `/orgs/${R}/members/${junior.user_id}/suspend`, { token: deputy })).status, 200);
+}
+
+console.log('\n== removal is not a pause ==');
+{
+  const owner = (await call('POST', '/auth/login', { body: { email: 'owner@acme.test', password: 'demo1234' } })).body.token;
+  const org = await call('POST', '/orgs', { token: owner, body: { name: 'Removal Tests' } });
+  const R = org.body.id;
+  const ownerR = (await call('POST', '/auth/token', { token: owner, body: { orgId: R } })).body.token;
+
+  const inv = await call('POST', `/orgs/${R}/invites`, { token: ownerR, body: { email: 'leaver@example.test', role: 'viewer' } });
+  await call('POST', `/invites/${inv.body.inviteToken}/accept`, { body: { name: 'Leaver', password: 'password123' } });
+  const members = await call('GET', `/orgs/${R}/members`, { token: ownerR });
+  const leaver = members.body.members.find((m) => m.email === 'leaver@example.test');
+
+  check('removed from the org', (await call('DELETE', `/orgs/${R}/members/${leaver.user_id}`, { token: ownerR })).status, 200);
+  const back = await call('DELETE', `/orgs/${R}/members/${leaver.user_id}/suspend`, { token: ownerR });
+  check('reinstatement will NOT resurrect a removed membership', [back.status, back.code], [409, 'ALREADY_REMOVED']);
+  check('  ...they are still out', (await call('GET', `/orgs/${R}/members`, { token: ownerR })).body.members.find((m) => m.user_id === leaver.user_id).status, 'removed');
+
+  // The only way back is an invite, which is the only way in.
+  const again = await call('POST', `/orgs/${R}/invites`, { token: ownerR, body: { email: 'leaver@example.test', role: 'operator' } });
+  check('  ...and an invite brings them back, with a new role', again.status, 201);
+  // A removed member cannot sign in at all (login needs an active membership), so the order here
+  // is: redeem FIRST, then sign in. My first version did it the other way round and asserted on a
+  // null token.
+  const acc = await call('POST', `/invites/${again.body.inviteToken}/accept`, { body: { name: 'Leaver', password: 'password123' } });
+  check('redeemed', [acc.status, acc.body.role], [200, 'operator']);
+  const after = (await call('POST', '/auth/token', { token: await login('leaver@example.test', 'password123'), body: { orgId: R } })).body.token;
+  check('  ...and the new role is the invited one', (await call('GET', '/auth/me', { token: after })).body.role, 'operator');
+}
+
+console.log('\n== a grant may only target someone who can use it ==');
+{
+  const owner = (await call('POST', '/auth/login', { body: { email: 'owner@acme.test', password: 'demo1234' } })).body.token;
+  const org = await call('POST', '/orgs', { token: owner, body: { name: 'Grant Targets' } });
+  const R = org.body.id;
+  const ownerR = (await call('POST', '/auth/token', { token: owner, body: { orgId: R } })).body.token;
+
+  const inv = await call('POST', `/orgs/${R}/invites`, { token: ownerR, body: { email: 'sleeper@example.test', role: 'viewer' } });
+  await call('POST', `/invites/${inv.body.inviteToken}/accept`, { body: { name: 'Sleeper', password: 'password123' } });
+  const members = await call('GET', `/orgs/${R}/members`, { token: ownerR });
+  const sleeper = members.body.members.find((m) => m.email === 'sleeper@example.test');
+
+  check('a grant to an active member is fine', (await call('POST', `/orgs/${R}/grants`, { token: ownerR, body: { userId: sleeper.user_id, effect: 'allow', permissions: ['device:view'] } })).status, 201);
+
+  await call('POST', `/orgs/${R}/members/${sleeper.user_id}/suspend`, { token: ownerR });
+  const toSuspended = await call('POST', `/orgs/${R}/grants`, { token: ownerR, body: { userId: sleeper.user_id, effect: 'allow', permissions: ['device:control'] } });
+  check('a grant to a SUSPENDED member is 404', [toSuspended.status, toSuspended.code], [404, 'NOT_FOUND']);
+
+  await call('DELETE', `/orgs/${R}/members/${sleeper.user_id}/suspend`, { token: ownerR });
+  await call('DELETE', `/orgs/${R}/members/${sleeper.user_id}`, { token: ownerR });
+  const toRemoved = await call('POST', `/orgs/${R}/grants`, { token: ownerR, body: { userId: sleeper.user_id, effect: 'allow', permissions: ['device:control'] } });
+  check('a grant to a REMOVED member is 404', [toRemoved.status, toRemoved.code], [404, 'NOT_FOUND']);
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);
 shutDown();
 process.exit(fail === 0 ? 0 : 1);

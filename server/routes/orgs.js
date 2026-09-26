@@ -11,7 +11,7 @@
 // Steps 1 and 2 produce byte-identical bodies, because a 403 on a resource in another org would
 // confirm that resource exists.
 
-import { send, notFound, badRequest, selfRoleChange } from '../http.js';
+import { send, notFound, badRequest, conflict, selfRoleChange } from '../http.js';
 import { assertSameOrg } from '../context.js';
 import { stmt } from '../internal/sql.js';
 import { newId, nowIso } from '../db.js';
@@ -176,8 +176,28 @@ export function register(router) {
       const target = stmt(ctx.db, 'membershipByOrgUser').get(params.org, params.userId);
       if (!target) throw notFound();
 
-      if (suspended && target.role === 'owner') assertNotLastOwner(ctx.db, params.org, params.userId);
-      if (!suspended && target.role === 'owner') assertNotLastOwner(ctx.db, params.org, params.userId);
+      // Rank applies here too. It was missing, and the omission was invisible until an audit
+      // pointed at it: an `admin` could SUSPEND the org owner — while changing that same owner's
+      // ROLE correctly returned 403 from the route above. Two answers to one question. Verified
+      // before the fix: admin POST .../members/usr_dana/suspend -> 200, and the owner's live
+      // sessions ended with `user_suspended`. `PERMISSIONS.md §6` is about modifying a user, not
+      // about the specific verb, and AUTH-DATA-MODEL.md §7 says outright that suspension needs
+      // "the rank rules".
+      assertCanModify(ctx.db, ctx.role, target.role);
+
+      // Reinstatement revives a SUSPENDED membership and nothing else. Writing 'active'
+      // unconditionally meant a `removed` membership could be walked back in with no invite, no
+      // role re-check, and — because grants hang off (org, user) — every grant they had before
+      // they left, including the ones that were put there to stop them. Removal is not a pause
+      // (D15); the only way back is an invite, which is the only way in (D14).
+      if (!suspended && target.status === 'removed') {
+        throw conflict('this person was removed, not suspended — invite them back', 'ALREADY_REMOVED');
+      }
+      if (!suspended && target.status === 'invited') {
+        throw conflict('this invite has not been accepted yet', 'NOT_A_MEMBER');
+      }
+
+      if (target.role === 'owner') assertNotLastOwner(ctx.db, params.org, params.userId);
 
       // Suspension CASCADES to live sessions (D16 / D20) — it is an account event, not a
       // permission tweak. Reinstatement does not resurrect them; a session is a record of

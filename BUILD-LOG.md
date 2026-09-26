@@ -726,6 +726,49 @@ because there is nothing to say. The console no longer swallows a failed sign-ou
 `catch {}` — if the server cannot be reached it says so on the gate, because a sign-out that
 silently fails is the one failure a user cannot detect for themselves.
 
+### 4. One rule, two answers, because I wrote it on one route and not the other
+
+`PERMISSIONS.md §6` is about *modifying a user*, not about a particular verb. I had implemented it
+on the role-change route and not on suspend/reinstate, and never noticed, because no shipped test
+suspends anybody of a higher rank. An audit did:
+
+```
+admin POST   /orgs/org_acme/members/usr_dana/suspend    -> 200   (usr_dana is the OWNER)
+admin PATCH  /orgs/org_acme/members/usr_dana {"role":…} -> 403   a admin cannot modify a owner
+```
+
+Same caller, same target, same question, two answers — and the 200 also ended the org owner's live
+sessions with `user_suspended`. `assertCanModify` is now called on the suspend path, and the test
+asserts the thing that actually matters: **both verbs agree.** A rule enforced on one route and not
+its sibling is not a rule, it is a coincidence that happens to hold on the paths someone tested.
+
+### 5. Removal is not a pause
+
+Reinstatement wrote `status = 'active'` unconditionally, without looking at what the status had
+been. So a `removed` membership could be walked back in: no invite, no role check — and because
+grants hang off `(org, user)`, **every grant they had before they left came back too**, including
+the deny that existed to stop them. `AUTH-DATA-MODEL.md` is explicit that invites are the only way
+in (D14) and that users are never deleted (D15); a `reinstate` verb that undoes a removal without
+an invite is a third way in that nobody sanctioned.
+
+Reinstatement now revives a `suspended` membership and refuses anything else, with a 409 that says
+which. The only way back from removal is an invite, and the test walks the whole loop: remove →
+reinstate refused → still out → invite → redeem → new role applied.
+
+### 6. A grant staged for someone who cannot use it
+
+`AUTH-DATA-MODEL.md §8` says a grant's `userId` must be "an **active** member of this org → 404".
+I had excluded only `removed`, so a grant could be attached to a `suspended` or a not-yet-accepted
+`invited` membership — authority with nobody to use it, pre-loaded for the moment they came back.
+Now only `active` is accepted.
+
+### A crash I introduced fixing the above, which the test caught immediately
+
+The `reinstate` guard calls `conflict()`, and I had removed that from the import list in Phase 3
+while tidying unused imports — so it was a `ReferenceError` and a `500`. Caught on the first run of
+the new tests, which is the argument for writing the test in the same commit as the fix: the fix
+and its regression test were never both green at the same time otherwise.
+
 ### The pattern across all three
 
 Every one is a check I ran, and none of them was a check that could fail. I asserted the 401 and

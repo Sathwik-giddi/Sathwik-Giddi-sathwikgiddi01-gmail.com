@@ -221,8 +221,14 @@ export function register(router) {
 
       // A grant is org-scoped by construction, so the target has to be a member of THIS org. A user
       // from another org is 404, not 403 — the same invisibility rule as a device.
+      //
+      // `status` is checked, and 'active' is the only acceptable answer: AUTH-DATA-MODEL.md §8
+      // says "userId is an ACTIVE member of this org → 404". I had only excluded 'removed', which
+      // meant a grant could be attached to a `suspended` or an un-accepted `invited` membership —
+      // authority staged for someone who cannot use it, and pre-loaded for the moment they are
+      // reinstated.
       const target = stmt(ctx.db, 'membershipByOrgUser').get(params.org, userId);
-      if (!target || target.status === 'removed') throw notFound();
+      if (!target || target.status !== 'active') throw notFound();
 
       // D9, first half. Self-grants are refused even for an owner: the point is that authority
       // flows downward through a deliberate act by someone else, not that owners are exempt.
