@@ -112,10 +112,136 @@ reads claims first would sail through it on the `exp` check and only trip on the
 The suite passes either way; I put the signature first because the only safe time to trust a
 claim is after the bytes carrying it are authenticated.
 
-## Phase 2 — caller context and the resolution engine
+## 2026-09-26 · Phase 2 — caller context and the resolution engine
 
-_This is where most people's first model is wrong. Write down the model you started with, the
-observation that broke it, and the model you moved to. Be specific about the observation._
+`check-permissions.js` 35/35 and `check-personalisation.js` 18/18, both green on the first run.
+Again suspicious, so most of this entry is about the things the green did *not* settle.
+
+### The model I started with, and the line that broke it
+
+My first mental model was one line of code:
+
+```
+if any applicable grant denies -> deny
+else if baseline has it        -> allow
+else if any applicable grant allows -> allow
+else                           -> deny (implicit)
+```
+
+with "applicable" meaning `device_id IS NULL OR device_id = <the device in the question>`.
+`check-permissions.js:85` is the case aimed at that model — a device-scoped `allow
+device:terminal` against an org-wide `deny device:terminal` — and my ordering handles it, so I
+recorded the suite as agreeing with me and moved on. That was the mistake: the suite agreeing
+with the model I already had is not evidence.
+
+So I went looking for the question the model does not have an answer for, and it is the one
+`resolve()` is called with most often in production code: **`deviceId: null`**. Nothing in the
+engine's own suite pins it. `tests/ui.spec.js` and `check-api.js` only ever assert device-level
+answers.
+
+PERMISSIONS.md §3 says the org-level context is "the union across all devices in the org". So
+the question is not "which grants name no device" but "what can this person do *anywhere* in
+this org". Two consequences I had to settle, and neither is written down anywhere:
+
+- a **device-scoped allow** must be visible org-wide, or the Grants nav card (gated on
+  `user:read`, per UI-INVENTORY.md §2) would be absent for someone who can in fact read grants on
+  one machine;
+- a **device-scoped deny** must **not** be promoted org-wide, or Acme's viewer — who is denied
+  `device:view` on the lobby kiosk and allowed it on four other machines — would resolve
+  `device:view` to *deny* at org level, which is a lie about a permission they demonstrably hold.
+
+That is an asymmetry: allows travel up, denies stay down. I do not like it, and I could not
+construct a case where the alternative is better. What convinced me it is right is a
+self-consistency property, which I then wrote a test for
+(`scripts/check-seams.js`, "org-level gating and org-level authorisation cannot disagree"):
+`GET /auth/me` hands the console one org-level set to gate navigation on, and the org-level
+endpoints authorise with the same org-level question. If the console's answer and the endpoint's
+answer came from different sets, the console would eventually render a card whose endpoint
+refuses — or hide a card whose endpoint allows. Same set, same instant, same function: the two
+cannot drift. Pinned at 8 permissions × can/assertCan agreement.
+
+### A bug my own test found, in code the shipped suite was happy with
+
+`assertMayGrant` originally reported a `scope_mismatch` when the caller held a permission
+org-wide but not on the device being granted. My test asserted that reason and got
+`missing_permission` instead. Chasing it:
+
+**`scope_mismatch` is unreachable.** An org-wide allow is collected at *every* device scope — that
+is what `decide()` does — so the only way to hold a permission org-wide and not on one device is
+a device-scoped deny, which is the `explicit_deny` case. I had written a branch for a state the
+engine cannot be in. Deleted, and the reason now comes from the resolution verdict itself, so a
+laundering attempt blocked by an org-wide deny answers `explicit_deny` and **names the grant that
+has to be revoked first** — which is a thing the caller can go and do. `PERMISSIONS.md §5` lists
+`scope_mismatch` as a reason code; under §3's algorithm it cannot occur. Written up in
+DECISIONS.md rather than left in as decoration.
+
+### Three tests of mine were wrong, and one was wrong in an interesting way
+
+Worth recording because two of them would have shipped as false confidence:
+
+1. I asserted a `foreign_keys`-off probe would let a nonsense permission through. It came back
+   `refused` — because my probe had no `grants` row, so the `grant_id` FK fired first and the
+   test passed **for the wrong reason**. A green assertion that was never testing its subject.
+   Fixed by inserting a real grant, and the trap now demonstrates properly: `device:teleport`
+   inserts with the pragma off, is refused with it on, and `device:*` still inserts.
+2. I asserted a `memberships.role` pointing at a nonexistent role resolves to an empty baseline.
+   It cannot: `role REFERENCES roles(key)`, so the write is refused. I had planned a defensive
+   branch in the engine for a state the schema forbids — untestable, therefore worthless. The
+   test now asserts the FK instead, which is the guarantee I am actually leaning on.
+3. I expected four forged tokens to be rejected by the token parser. Three of them are correctly
+   signed, so accepting them is right: `pv: -1`, `exp: 9e15`, and `org: "../../org_globex"`. The
+   parser answers "is this authentic and well-formed"; `context.js` answers "does it still
+   describe a real (user, org) pair". The tests now assert the outcome instead of the layer, and
+   the traversal case is worth having as a written property: the `org` claim is only ever used as
+   a **bound parameter**, so `../../org_globex` cannot reach outside — it just fails to match.
+
+### Measured, not assumed: the exclusive-session race
+
+better-sqlite3 is synchronous, so a loop in one process cannot interleave two transactions and
+proves nothing about D10. `scripts/check-seams.js` forks **8 processes** that all try to take
+`dev_lab_mac_01` at once, against one file-backed database:
+
+```
+8 processes raced for dev_lab_mac_01: 1 won, 7 refused
+losers reported SQLITE_CONSTRAINT_UNIQUE (not SQLITE_BUSY)
+the raced database holds exactly one active exclusive session
+```
+
+One winner, seven refusals, no `SQLITE_BUSY` anywhere — which is what `busy_timeout = 5000` plus
+WAL is for. I did not write a line of application code for this; the partial unique index
+`one_exclusive_session_per_device` is the entire implementation, and the route only has to
+translate the constraint error into `409 DEVICE_BUSY`.
+
+### Offboard/rehire, which the schema answers and I had not thought about
+
+`grants` reference `(org_id, user_id)`, **not** the membership. So a removed member's grants
+survive their removal, and re-inviting them restores the grants they had before they left —
+including the deny that was on them. Verified both directions: removed → `not_a_member` on every
+scope including their granted device; re-hired → baseline and both grants back; re-hired as a
+*different* role → the baseline follows the membership, the grants do not. Not a bug, and not my
+choice — a consequence of where the schema hangs authority. It is the kind of thing that should
+be a product decision, so it is going in DECISIONS.md.
+
+### Non-members: one word or three
+
+`suspended`, `invited` and `removed` are three states and `resolve()` has to say something for
+each. I report `suspended` for suspended — the console has to be able to say "suspended" rather
+than "not a member", because one is reversible and the other is not — and `not_a_member` for
+both `invited` and `removed`. A third word would only give the console something to say that is
+not true: a removed member is not a member, full stop. The resolver reads the status from the
+database rather than from a list, so a status the schema gains later needs no change here.
+
+### On caching, since the brief asks
+
+The cache scope is **one request**. `createResolver` reads the catalogue, the baseline and every
+live grant once, and `authenticate()` builds exactly one per request and hands it to the routes
+as `ctx.resolver`. It cannot serve stale authority because it does not outlive the request that
+created it — there is no window in which a revoked grant, a lapsed `starts_at`/`expires_at`
+window (D7), or a role change could be answered from a previous request's conclusion. Freshness
+across requests is `perm_version`, checked in `context.js` on every single one. The alternative
+I rejected is a process-wide cache keyed by `(userId, orgId)` with a short TTL: it is faster
+still, and it is the thing `AUTH-DATA-MODEL.md §3(2)` warns about by name, because a TTL is a
+window in which a revocation is not yet true.
 
 ## Phase 3 — orgs, members, invites
 

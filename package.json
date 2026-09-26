@@ -10,8 +10,10 @@
     "start": "NODE_ENV=production node server/index.js",
     "db:reset": "rm -f app.db app.db-wal app.db-shm && npm run db:load",
     "db:load": "node scripts/load-db.js",
+    "pretest": "vite build",
     "test": "playwright test",
     "test:ui": "playwright test --ui",
+    "check": "node scripts/check-jwt.js && node scripts/check-permissions.js && node scripts/check-personalisation.js && node scripts/check-api.js && node scripts/check-seams.js",
     "personalisation": "node scripts/check-personalisation.js",
     "fingerprint": "node scripts/personalise.js"
   },
