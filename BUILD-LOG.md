@@ -1735,6 +1735,73 @@ when the fix they cover is reverted.
 | `npm run check` | 551 assertions | 564 assertions, 7 suites |
 | browser tests | 63 | 63 |
 
+## Phase 15, cancelling an invite, which the endpoints allowed and the console did not
+
+Phase 14 turned up four server capabilities with no user interface. One of them was not a missing
+feature, it was a hole.
+
+`GET /v1/orgs/:org/invites` and `DELETE /v1/orgs/:org/invites/:id` were built in Phase 3, permissioned
+on `user:invite`, audited, and reachable by nothing. The People card showed the invite link once, at
+the moment it was created, and only the hash is stored (D17). So an invite sent to a mistyped address
+was a **live bearer credential that nobody could cancel** until it expired seven days later, in a
+product whose entire subject is controlling access. `DELETE` had no test anywhere in the repository.
+
+The People card now carries an Outstanding invites section: the invited address, the role it carries,
+when it expires, and a Revoke button. Settled invites (redeemed, revoked, expired) fold away under a
+count rather than disappearing, because "I cancelled it" and "it was never sent" should not look the
+same.
+
+Three decisions in it worth recording.
+
+**The list cannot show the link, and says so.** Only the hash exists, so the list is a list of things
+to cancel, never a list of links to re-send. A test asserts the token appears nowhere in the
+rendered section, because a section that looked like it could recover a link would be worse than one
+that plainly cannot.
+
+**Revoke has no confirmation, and that is deliberate.** The decommission panel needs one because
+nothing in the console undoes it. Cancelling an invite costs one click on Invite to put right, so a
+modal asking whether you are sure is one more thing between a person and a fix.
+
+**The list is fetched separately and gated, not folded into the card's data fetch.** The People card
+is gated on `user:read`, and an auditor or a viewer holds that without `user:invite`, so merging the
+requests would hand every viewer a 403 and break a page they are entitled to. The section is absent
+for them, and no error is shown for a request that was never made.
+
+### The revoke was the security content, and it had no test
+
+`scripts/check-http-seams.js` now asserts the properties, not the plumbing: a revoked link answers
+410, redeeming it answers 409 `INVITE_USED`, no membership is created, a neighbouring invite is
+untouched, a second revoke is 404 rather than a second write, a token from another organization
+cannot revoke, somebody without `user:invite` gets 403 for both the list and the revoke, the invite
+survives both refusals, and the refusal is written to the audit log. The list is asserted never to
+contain the token.
+
+Each was confirmed to fail when the behaviour is reverted. Making `revokeInvite` a no-op fails the
+410, the 409 and the membership check; dropping the `assertCan` on the list fails the 403.
+
+`tests/invites.spec.js` drives the same thing through the browser, including the property that
+matters: the link, opened in a clean context after the revoke, no longer works.
+
+### And a second instance of the cell-height bug, in a class nobody had looked at
+
+The new table's divider stepped. The cause was `.cell-sub`, which is `display: flex` so a device id
+and its grant badge sit on one line, applied as a `<td>` in the sessions, audit and invites tables. A
+flex container is not a table cell, so it drops out of the row's height: that cell came out 17px short
+and the divider visibly stepped across it. This is the same defect as the one on `.actions` in Phase
+13, in a different class, and the sessions and audit tables have had it the whole time.
+
+Fixing the class rather than the five call sites, because the bug is the class being usable in two
+places and only working in one.
+
+| | before | after |
+|---|---|---|
+| outstanding invites visible in the console | none | list, with Revoke |
+| `DELETE /orgs/:org/invites/:id` coverage | none | 11 properties |
+| cancelling a mistyped invite | impossible | one click |
+| tables with a stepped row divider | 3 | 0 |
+| `check-http-seams.js` | 169 assertions | 188 assertions |
+| browser tests | 63 | 69 |
+
 ## Open threads
 
 Things I know are wrong, unfinished, or that I would do differently. Listed honestly because they

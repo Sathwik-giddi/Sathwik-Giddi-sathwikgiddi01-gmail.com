@@ -8,7 +8,7 @@
 // requires `user:read` and there is no `grant:read` permission in the catalogue. An auditor
 // therefore sees the grants table and cannot change it, which is the correct reading of "read-only".
 
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import * as api from '../api.js';
 import { IfAllowed, PermButton, allows, allowsAny, verdict, provenance } from '../presence.jsx';
 
@@ -454,10 +454,28 @@ export function PeopleCard({ orgId, orgPermissions, members, onReload, onError, 
   const [role, setRole] = useState('viewer');
   const [issued, setIssued] = useState(null);
   const [busy, setBusy] = useState(null);
+  const [invites, setInvites] = useState(null);
+  const [inviteError, setInviteError] = useState(null);
 
+  // Fetched here rather than folded into the card's own data fetch, because the two need different
+  // permissions: the People card is gated on `user:read`, and an AUDITOR holds that but not
+  // `user:invite`, so `GET /invites` would 403 for exactly the person who is allowed to be here.
+  // An absent fetch is the honest answer for them, and the section is gated to match.
+  const canInvite = allows(orgPermissions, 'user:invite');
+  const loadInvites = useCallback(async () => {
+    if (!canInvite) return;
+    try { setInvites(await api.listInvites(orgId)); setInviteError(null); }
+    catch (err) { setInviteError(err.human ?? err.message); }
+  }, [orgId, canInvite]);
+
+  useEffect(() => { loadInvites(); }, [loadInvites]);
+
+  // `loadInvites()` sits in here rather than in each action, because the list is a second view of
+  // the same organization and every action in this card can change it. Adding it per-action was the
+  // first attempt and it had already been forgotten once, which is what a shared `run` is for.
   const run = async (key, fn) => {
     setBusy(key);
-    try { await fn(); await onReload(); }
+    try { await fn(); await onReload(); await loadInvites(); }
     catch (err) { onError(err); }
     finally { setBusy(null); }
   };
@@ -573,9 +591,133 @@ export function PeopleCard({ orgId, orgPermissions, members, onReload, onError, 
           ))}
         </tbody>
       </table>
+
+      <IfAllowed permissions={orgPermissions} permission="user:invite">
+        <OutstandingInvites
+          invites={invites}
+          error={inviteError}
+          busy={busy}
+          onRevoke={async (id) => {
+            setBusy(`revoke-${id}`);
+            setInviteError(null);
+            try {
+              await api.revokeInvite(orgId, id);
+              await loadInvites();
+              await onReload();
+            } catch (err) {
+              setInviteError(err.human ?? err.message);
+            } finally {
+              setBusy(null);
+            }
+          }}
+        />
+      </IfAllowed>
     </section>
   );
 }
+
+
+/**
+ * Invites this organization has sent that have not been redeemed, and a way to cancel them.
+ *
+ * Before this existed, the only record of an invite was the link, shown once at the moment it was
+ * created, and only its hash is stored (D17). So an invite sent to a mistyped address stayed live
+ * until it expired with no way to kill it, in a product whose entire subject is controlling access.
+ * The endpoints were already built and permissioned; the console could not reach them.
+ *
+ * There is no confirmation step on Revoke, and that is deliberate rather than an omission. The
+ * decommission panel needs one because nothing in the console undoes it. This does: cancelling an
+ * invite costs one click on Invite to put right, so a modal asking whether you are sure would be one
+ * more thing between a person and a fix.
+ */
+function OutstandingInvites({ invites, error, busy, onRevoke }) {
+  // The server's `isLive` is "not accepted and not revoked"; expiry is a separate comparison, and an
+  // expired invite is exactly as dead as a revoked one, so offering a Revoke for it would be offering
+  // a button that always 404s.
+  const now = Date.now();
+  const actionable = (i) => !i.accepted_at && !i.revoked_at && new Date(i.expires_at).getTime() > now;
+  const all = invites?.invites ?? [];
+  const live = all.filter(actionable);
+  const settled = all.filter((i) => !actionable(i));
+
+  // Nothing rendered until the list has landed, so the section does not flash an empty state on the
+  // way in and then fill.
+  if (invites === null && !error) return null;
+  if (invites === null) {
+    return <p className="panel__problem" role="alert" data-testid="invites-error">{error}</p>;
+  }
+
+  return (
+    <div className="invites" data-testid="outstanding-invites" data-live-count={live.length}>
+      <h3 className="invites__title">
+        Outstanding invites
+        {live.length > 0 && <span className="tag tag--perm">{live.length}</span>}
+      </h3>
+
+      {error && <p className="panel__problem" role="alert" data-testid="invites-error">{error}</p>}
+
+      {live.length === 0 ? (
+        <p className="invites__none" data-testid="invites-empty">
+          {settled.length > 0
+            ? 'No outstanding invites. Every invite sent has been redeemed or has expired.'
+            : 'No outstanding invites.'}
+        </p>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr><th>Invited</th><th>Role</th><th>Expires</th><th>Actions</th></tr>
+          </thead>
+          <tbody>
+            {live.map((i) => (
+              <tr key={i.id} data-testid="invite-row" data-invite-id={i.id} data-invite-email={i.email}>
+                <td>
+                  <div className="cell-name">{i.email}</div>
+                  <div className="cell-sub"><code>{i.id}</code></div>
+                </td>
+                <td><span className="tag">{i.role}</span></td>
+                <td className="cell-sub">{fmtTime(i.expires_at)}</td>
+                <td>
+                  <div className="actions">
+                    <button
+                      data-testid="revoke-invite"
+                      data-invite-id={i.id}
+                      className="perm danger"
+                      disabled={busy === `revoke-${i.id}`}
+                      onClick={() => onRevoke(i.id)}
+                    >Revoke</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {/* The one thing this list cannot do, said where somebody will look for it. */}
+      <p className="invites__note">
+        A link is shown once, when it is created, and is not stored, so it cannot be sent again or
+        recovered. Revoking is the only thing left to do with one you have lost.
+      </p>
+
+      {settled.length > 0 && (
+        <details className="invites__settled">
+          <summary>{settled.length} settled</summary>
+          <ul>
+            {settled.map((i) => (
+              <li key={i.id}>
+                <code>{i.email}</code> &middot; {i.role} &middot;{' '}
+                {i.accepted_at ? `redeemed ${fmtTime(i.accepted_at)}`
+                  : i.revoked_at ? `revoked ${fmtTime(i.revoked_at)}`
+                  : 'expired'}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
 
 /**
  * The role picker. `user:role:update` gates whether it is rendered at all; the CHOICES come from

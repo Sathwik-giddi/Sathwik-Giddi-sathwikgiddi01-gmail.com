@@ -669,6 +669,80 @@ console.log('\n== the refresh lineage, and sign-out, must have CONSEQUENCES ==')
 }
 
 // =============================================================================
+console.log('\n== an invite can be cancelled, and cancelling it kills the link ==');
+{
+  // `DELETE /v1/orgs/:org/invites/:id` had no test anywhere in the repository until the console grew
+  // a control for it. It is the only thing standing between a mistyped address and an invite that
+  // works for seven days, so the properties below are the security content, not the plumbing.
+  const org = await call('POST', '/orgs', { token: A_TOKEN, body: { name: 'Revoke Tests' } });
+  const V = org.body.id;
+  const V_TOKEN = (await call('POST', '/auth/token', { token: A_TOKEN, body: { orgId: V } })).body.token;
+
+  const mint = async (email) => {
+    const r = await call('POST', `/orgs/${V}/invites`, { token: V_TOKEN, body: { email, role: 'viewer' } });
+    return { status: r.status, body: r.body, token: r.body.inviteToken };
+  };
+  const a = await mint('cancel-me@example.test');
+  const b = await mint('keep-me@example.test');
+  check('an invite can be minted for the cancel test', a.status, 201);
+
+  // The list shows the invite but NOT the token. Only the hash is stored (D17), so a list of
+  // outstanding invites is a list of things to cancel and cannot become a list of links to re-send.
+  const list = await call('GET', `/orgs/${V}/invites`, { token: V_TOKEN });
+  check('the invite list is readable by somebody who may invite', list.status, 200);
+  check('  ...and it contains the invite', list.body.invites.some((i) => i.id === a.body.id), true);
+  check('  ...and never the token', JSON.stringify(list.body).includes(a.token), false);
+  check('  ...and never the token hash either', JSON.stringify(list.body).toLowerCase().includes('hash'), false);
+
+  // Before: the link works.
+  const beforeAccept = await call('GET', `/invites/${a.token}`);
+  check('an outstanding invite link resolves', beforeAccept.status, 200);
+
+  // The happy path.
+  const revoked = await call('DELETE', `/orgs/${V}/invites/${a.body.id}`, { token: V_TOKEN });
+  check('an invite can be revoked', [revoked.status, revoked.body.ok], [200, true]);
+
+  // THE PROPERTY. Cancelling has to kill the link, not just hide the row.
+  const afterAccept = await call('GET', `/invites/${a.token}`);
+  check('a revoked link is no longer usable', afterAccept.status, 410);
+  const acceptAfter = await call('POST', `/invites/${a.token}/accept`, { body: { name: 'Too Late', password: 'password123' } });
+  // `INVITE_USED` rather than the bare `CONFLICT`: the code table has a specific code for a spent
+  // invite, and a cancellation is one of the two ways to get there.
+  check('  ...and cannot be redeemed', [acceptAfter.status, acceptAfter.code], [409, 'INVITE_USED']);
+  const member = await call('GET', `/orgs/${V}/members`, { token: V_TOKEN });
+  check('  ...and no membership was created', member.body.members.some((m) => m.email === 'cancel-me@example.test'), false);
+
+  // The other invite is untouched by its neighbour's cancellation.
+  const other = await call('GET', `/invites/${b.token}`);
+  check('revoking one invite leaves the others alone', other.status, 200);
+
+  // Refusals, in the order a person would hit them.
+  const again = await call('DELETE', `/orgs/${V}/invites/${a.body.id}`, { token: V_TOKEN });
+  check('revoking an already-revoked invite is 404, not a second write', again.status, 404);
+  const crossOrg = await call('DELETE', `/orgs/${A}/invites/${b.body.id}`, { token: B_TOKEN });
+  check('a token from another organization cannot revoke', [crossOrg.status, crossOrg.code], [404, 'NOT_FOUND']);
+  check('  ...and the invite survives it', (await call('GET', `/invites/${b.token}`)).status, 200);
+  // A member of THIS org who cannot invite. It has to be scoped to V, not borrowed from org A: a
+  // token naming a different org is refused before the permission is ever consulted, so it answers
+  // 404 (or 401) and proves nothing about `user:invite`.
+  const watcher = await mint('watcher@example.test');
+  await call('POST', `/invites/${watcher.token}/accept`, { body: { name: 'Watcher', password: 'password123' } });
+  const watcherToken = (await call('POST', '/auth/token', {
+    token: await login('watcher@example.test', 'password123'), body: { orgId: V },
+  })).body.token;
+  check('the watcher joined as a viewer', (await call('GET', `/orgs/${V}/members`, { token: V_TOKEN }))
+    .body.members.find((m) => m.email === 'watcher@example.test').role, 'viewer');
+
+  const noPermission = await call('DELETE', `/orgs/${V}/invites/${b.body.id}`, { token: watcherToken });
+  check('somebody without user:invite cannot revoke', [noPermission.status, noPermission.code], [403, 'FORBIDDEN']);
+  check('  ...and the invite survives that too', (await call('GET', `/invites/${b.token}`)).status, 200);
+  const noList = await call('GET', `/orgs/${V}/invites`, { token: watcherToken });
+  check('somebody without user:invite cannot list them either', [noList.status, noList.code], [403, 'FORBIDDEN']);
+  // Raw `audit_events` rows, so the columns are `result`/`deny` and `reason_code`.
+  check('  ...and the refusal was written to the audit log', (await call('GET', `/orgs/${V}/audit?limit=50`, { token: V_TOKEN }))
+    .body.events.some((e) => e.action === 'invite.revoke' && e.result === 'deny'), true);
+}
+
 console.log('\n== modification authority is the same rule on every verb ==');
 {
   // The rank rule (PERMISSIONS.md §6) is about MODIFYING a user, not about a particular verb. It

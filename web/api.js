@@ -205,6 +205,18 @@ export const listAudit = (orgId, { limit = 50, offset = 0 } = {}) =>
 
 export const createInvite = (orgId, email, role) => post(`/v1/orgs/${orgId}/invites`, { email, role });
 
+/**
+ * Outstanding and settled invites for an organization.
+ *
+ * Note what this CANNOT return: the link. The raw token is returned exactly once, by `createInvite`,
+ * and only its hash is stored (D17), so this list is for cancelling an invite you have lost, not for
+ * re-sending one. That is the whole reason this pair of functions was deleted as dead code in Phase
+ * 14 and is now here again: the endpoints existed, the console could not reach them, and an invite
+ * sent to a wrong address was a live bearer credential with no way to cancel it.
+ */
+export const listInvites = (orgId) => get(`/v1/orgs/${orgId}/invites`);
+export const revokeInvite = (orgId, id) => del(`/v1/orgs/${orgId}/invites/${id}`);
+
 /** Public. No token, this is what the /invite/:token page calls before anyone has signed in. */
 export const peekInvite = (token) => get(`/v1/invites/${encodeURIComponent(token)}`, { auth: false });
 export const acceptInvite = (token, name, password) =>

@@ -900,6 +900,28 @@ path cannot change without a full page load, and which fails with a blank consol
 **What would change my mind:** a client-side router. That is the thing that makes the second one
 matter rather than being pedantic, and it is the reason to fix it before writing one.
 
+### An invite you cannot cancel is a credential you cannot manage
+
+**What I chose:** the People card lists outstanding invites with a Revoke button, and settled invites
+fold away under a count.
+
+**Why:** `GET /invites` and `DELETE /invites/:id` have existed since Phase 3, permissioned and audited,
+and the console could not reach them. The link is shown once and only its hash is stored, so the
+window between "sent" and "expires" was seven days during which a mistyped or forwarded address held
+working access to the organization and no one could take it back. This is the only finding from the
+Phase 14 audit that is a control rather than a feature, which is why it was done first.
+
+**What I rejected:** showing the link in the list. It cannot be done, and pretending otherwise would
+be worse than the gap. A section that looked like it could recover a link would mislead. A test
+asserts the token appears nowhere in it.
+
+**What I rejected:** a confirmation step on Revoke. The decommission panel has one because nothing
+here undoes it. Re-inviting is one click, so a modal is one more obstacle between a person and a fix.
+
+**What would change my mind:** an invite that grants something irreversible before it is redeemed. It
+does not; the membership is only created on acceptance, which is also why a revoked invite leaves no
+trace to clean up.
+
 ## Deliberately not built
 
 Stated now for the things already decided; this section grows as the build does.
