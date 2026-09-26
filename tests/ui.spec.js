@@ -271,10 +271,19 @@ test('a new org can be created from the UI and you become its owner', async ({ p
   await login(page, 'dana@example.test');
   const before = await shell(page).getAttribute('data-org-id');
 
-  page.once('dialog', (d) => d.accept('E2E Fresh Org'));
+  // Was `page.once('dialog', d => d.accept(...))`, because creating an org was a window.prompt.
+  // It is a form now, and this test is the reason it had to become one: a native prompt cannot
+  // report the duplicate-name 409 that PERMISSIONS.md 5 lists, and it put the one creation flow
+  // BRIEF.md 3.2 asks for "from the UI" outside the app entirely.
   await page.getByTestId('create-org').click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.getByTestId('new-org-name').fill('E2E Fresh Org');
+  // Pick a colour rather than letting it hash off the name, and prove the choice is honoured.
+  await page.getByTestId('new-org-theme-plum').click();
+  await page.getByTestId('new-org-submit').click();
 
   await expect(shell(page)).not.toHaveAttribute('data-org-id', before);
+  await expect(shell(page)).toHaveAttribute('data-org-theme', 'plum');
   await expect(page.getByTestId('active-role')).toHaveText('owner');
   await expect(page.locator('[data-testid="org-option"]', { hasText: 'E2E Fresh Org' })).toHaveCount(1);
   await expect(page.getByTestId('devices-empty')).toBeVisible();
@@ -282,6 +291,38 @@ test('a new org can be created from the UI and you become its owner', async ({ p
   for (const key of ['devices', 'people', 'grants', 'sessions', 'audit', 'admin']) {
     await expect(page.getByTestId(`nav-${key}`)).toHaveCount(1);
   }
+});
+
+// The dialog's own rules. BRIEF.md 3.2 wants org creation "from the UI"; these are the parts a
+// window.prompt structurally could not do.
+test('the new-organization dialog refuses an empty name and cancels on Escape', async ({ page }) => {
+  await login(page, 'dana@example.test');
+  const before = await shell(page).getAttribute('data-org-id');
+
+  await page.getByTestId('create-org').click();
+  const submit = page.getByTestId('new-org-submit');
+  await expect(submit).toBeDisabled();                       // nothing typed yet
+  await page.getByTestId('new-org-name').fill('   ');        // whitespace is not a name
+  await expect(submit).toBeDisabled();
+
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(shell(page)).toHaveAttribute('data-org-id', before);   // nothing created
+});
+
+test('a duplicate organization name is reported on the field, not swallowed', async ({ page }) => {
+  await login(page, 'dana@example.test');
+  await page.getByTestId('create-org').click();
+  await page.getByTestId('new-org-name').fill('Acme Robotics');      // already exists
+  await page.getByTestId('new-org-submit').click();
+
+  // PERMISSIONS.md 5 lists `CONFLICT | 409 | duplicate name` and no schema can enforce it, so this
+  // is the one error this form can produce and it has to be visible somewhere.
+  const problem = page.locator('#neworg-problem');
+  await expect(problem).toBeVisible();
+  await expect(problem).toHaveAttribute('data-error-code', 'CONFLICT');
+  // The dialog stays open so the name can be corrected, rather than the org being created anyway.
+  await expect(page.getByRole('dialog')).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------

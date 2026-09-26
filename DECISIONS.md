@@ -335,6 +335,17 @@ succeed. The consequence is a cosmetic duplicate, which is the only reason I am 
 a check-then-act in a build that otherwise refuses to use one, and it is stated in the code comment
 rather than left to be discovered.
 
+**The check was wrong for its whole life, and only the UI found it.** The lookup carried an
+`id <> ?` clause excluding `ctx.orgId`, the caller's *current* org. The org being created does not
+exist yet, so its own id cannot match anything, so the exclusion removed exactly the row most likely
+to collide: copying the name of the organization you are looking at. The first duplicate was
+accepted, and only the second was caught, because by then some other row carried the name. It went
+unnoticed because every test that exercised the check used a name belonging to an org the caller was
+*not* in, which is the one case that worked. It was found by the new-organization form's own
+duplicate-name test, the first thing in this repository to try creating a same-named organization.
+The clause is gone, and `tests/contract.spec.js` now pins the case that was broken, verified to fail
+when the clause is put back.
+
 ---
 
 ### Every rejection carries the same client-facing message; the cause goes where the client cannot read it
@@ -779,6 +790,33 @@ it cannot see a slow response path, a serialised write, or a header that costs s
 config and in a monitoring alert rather than in a test, and a test that fails on a slow CI runner is
 worse than no test. Both are true today, the budget here is a regression guard for a single-process
 demo, and it is labelled as one.
+
+### Creating an organization is a form in the app, and there is no signup page at all
+
+**What I chose:** `window.prompt` is replaced by a real dialog: a name field, six colour choices plus
+"match the name", inline `role="alert"` error reporting, focus trapping, Escape and scrim-click
+cancellation. The six themes are served by `GET /v1/reference` so the client never holds a second
+copy of the list. There is still **no public registration route**, only invite acceptance.
+
+**Why the form was not optional:** `BRIEF.md §3.2` asks for 2 to 3 organizations created "from the
+UI", and a native prompt is not part of this app. It cannot report a 409, cannot show which names
+are taken before submitting, cannot offer the theme choice, and is not reachable by keyboard or read
+by a screen reader the way the rest of the console is. It was the only control in the product that had
+never been designed.
+
+**Why no signup page, since this was asked directly:** `AUTH-DATA-MODEL.md §6` says "Invites are the
+only way to add a person. One path means one set of edge cases", and D14 repeats it. A public
+registration route would also be a denial of service against our own users: register
+`dana@acme.test` first and, when the real Dana is later invited to that address, the invite can no
+longer be accepted, because the address is held by someone who was never entitled to it. That attack
+needs no credentials and works against a named colleague. Invite-only is both the specified design
+and the safer one, so an account is created by redeeming an invite, and the sign-in screen says so.
+
+**What I rejected:** a signup form, for the reason above. A "request access" form would have been
+cosmetic, since it would need a table the schema does not have.
+
+**What would change my mind:** a specification that adds a registration route, or a deployment where
+the member directory is not reachable by the people being invited.
 
 ## Deliberately not built
 

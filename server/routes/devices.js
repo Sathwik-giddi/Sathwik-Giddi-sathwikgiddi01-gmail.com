@@ -16,6 +16,7 @@
 //     rather than a 500, and a typo is never a silent deny.
 
 import { send, notFound, badRequest, forbidden, normalizeTs, HttpError } from '../http.js';
+import { ORGANIZATION_THEMES } from './orgs.js';
 import { assertSameOrg } from '../context.js';
 import { stmt } from '../internal/sql.js';
 import { newId, nowIso, bumpPermVersion } from '../db.js';
@@ -362,6 +363,12 @@ export function register(router) {
       patterns: stmt(ctx.db, 'referencePatterns').all().map((r) => r.pattern),
       roles: stmt(ctx.db, 'allRoles').all(),
       modes: ['view', 'control', 'terminal'],
+      // The six organization themes, so the create-organization form can offer the choice instead
+      // of the client keeping its own copy. Sourced from the SAME array `POST /v1/orgs` validates
+      // against, so the list a person can pick from and the list the endpoint accepts are provably
+      // one list. Six strings hardcoded in `web/` would be the second copy of the model that
+      // BRIEF.md 5.3 and UI-INVENTORY.md 1 both warn about.
+      themes: ORGANIZATION_THEMES,
     });
   });
 }

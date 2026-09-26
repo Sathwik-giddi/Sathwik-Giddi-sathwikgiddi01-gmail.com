@@ -22,6 +22,7 @@ import * as api from './api.js';
 import { allows, allowsAny } from './presence.jsx';
 import { Login, AcceptInvite } from './components/Gate.jsx';
 import { DevicesCard, PeopleCard, GrantsCard, SessionsCard, AuditCard, AdminCard } from './components/Cards.jsx';
+import { NewOrgDialog } from './components/NewOrg.jsx';
 
 // The card table. `permission` is the gate; `anyOf` is for the Admin card, which appears for
 // org:update OR org:delete (UI-INVENTORY.md §2). The order is the order they appear in.
@@ -161,6 +162,10 @@ function Shell({ me, onReload, onSignOut }) {
   const [auditPage, setAuditPage] = useState(0);
   const [error, setError] = useState(null);
   const [switching, setSwitching] = useState(false);
+  // Creating an organization was a `window.prompt` until Phase 12. BRIEF.md 3.2 asks for this "from
+  // the UI", and a native prompt cannot show the duplicate-name 409, could not offer the theme the
+  // endpoint already accepted, and sat outside the app's own focus handling.
+  const [creatingOrg, setCreatingOrg] = useState(false);
 
   // Reference data, the permission catalogue and the role list, fetched ONCE for the whole
   // console and threaded down. It used to be fetched independently by each RolePicker (one per
@@ -266,23 +271,6 @@ function Shell({ me, onReload, onSignOut }) {
     }
   }
 
-  async function createOrg() {
-    // A native prompt, deliberately: creating an organization is rare, needs one value, and a modal
-    // form for a single text field would be more code than the feature deserves.
-    const name = window.prompt('Name the new organization');
-    if (!name || name.trim() === '') return;
-    setError(null);
-    try {
-      const created = await api.createOrg(name.trim());
-      // Straight into the new org: you just made it, you are its owner, and that is the view you
-      // want to see. The token switch is what makes it the active org rather than a filter.
-      await api.switchOrg(created.id);
-      await onReload();
-    } catch (err) {
-      setError(err);
-    }
-  }
-
   const visible = CARDS.filter((c) => (c.anyOf ? allowsAny(permissions, c.anyOf) : allows(permissions, c.permission)));
   const current = visible.find((c) => c.key === view) ?? visible[0];
 
@@ -350,7 +338,7 @@ function Shell({ me, onReload, onSignOut }) {
             ))}
             {/* Was "+ New", which says nothing about what it creates. A control should name the
                 thing it makes; the test id stays `create-org` either way. */}
-            <button data-testid="create-org" className="btn" onClick={createOrg}>
+            <button data-testid="create-org" className="btn" onClick={() => { setError(null); setCreatingOrg(true); }}>
               New organization
             </button>
           </div>
@@ -361,6 +349,15 @@ function Shell({ me, onReload, onSignOut }) {
             {error.human}
             <button className="btn btn--ghost" onClick={() => setError(null)}>Dismiss</button>
           </p>
+        )}
+
+        {creatingOrg && (
+          <NewOrgDialog
+            themes={reference?.themes ?? []}
+            onCancel={() => setCreatingOrg(false)}
+            onError={setError}
+            onCreated={async () => { setCreatingOrg(false); await onReload(); }}
+          />
         )}
 
         <div className="content">

@@ -1490,6 +1490,69 @@ the server no longer starts without `APP_HASH_KEY`, so a test server that sets `
 stops working. Leaving `npm test` broken for anyone who clones the repository would have been the
 worse outcome. The tests themselves, the settings and the assertions are as issued.
 
+## Phase 12, the one control in the product that had never been designed
+
+Asked two questions: where is the create page, and how does anyone create an account. Both were
+fair, and the first one turned out to be a real defect.
+
+### The create page did not exist, because it was a window.prompt
+
+`POST /v1/orgs` has worked since Phase 3 and always made the caller the owner. The button in the
+header called it through `window.prompt`, which is why it looked absent. That is not a UI, and
+`BRIEF.md §3.2` asks for 2 to 3 organizations created "from the UI". A native prompt cannot report
+the 409, cannot show that a name is taken before submitting, cannot offer the theme choice, and is
+not reachable by keyboard the way everything else here is.
+
+It is now a dialog: name field, six colours plus "match the name" (which is the existing
+deterministic name hash, so the default is unchanged), the 409 rendered inline as a `role="alert"`
+that carries the error code, focus trapped while open, Escape and scrim click both cancel, and the
+new organization is switched to on success. The theme list is served from `GET /v1/reference`
+rather than duplicated in the client, because a second copy of the list is a second thing to forget
+to update.
+
+The old test drove the prompt with `page.once('dialog', d => d.accept(...))`. That line is the whole
+argument: the only automated coverage of organization creation had been written against a browser
+dialog, so nothing in the suite could have noticed the creation flow living outside the app.
+
+### Writing the form found a bug that had been there since Phase 3
+
+The first version of the form's duplicate-name test failed, and the reason was not the form. The
+`POST /v1/orgs` duplicate check excluded the caller's current org from its own lookup:
+
+```sql
+SELECT id FROM organizations WHERE name = ? COLLATE NOCASE AND deleted_at IS NULL AND id <> ?
+```
+
+The org being created does not exist yet, so its id cannot match anything. The clause therefore
+removed precisely the row most likely to collide, which is the org whose name is on screen. Asking
+for the name of the organization you are looking at returned 201 and made a second one; asking a
+second time returned 409, because by then a different row carried the name.
+
+It survived Phase 3 to Phase 12 because every test that touched the check used a name belonging to
+an org the caller was *not* in. The one case that worked was the only case tested. Both the fix and a
+regression test for the exact scenario are in, and the test was confirmed to fail when the `id <> ?`
+clause is restored.
+
+| | before | after |
+|---|---|---|
+| create organization | `window.prompt` | dialog with validation, themes, inline 409 |
+| themes | hashed from the name, or nothing | 6 named, or the name hash, chosen by the user |
+| duplicate name, current org | 201, silently accepted | 409 `CONFLICT` / `duplicate_name` |
+| `npm run check` | 169 tests, 7 suites | 169 tests, 7 suites green |
+| UI | 45 passing | 48 passing |
+
+### No signup page, and the reason is worth more than the feature
+
+The second question has a real answer rather than a missing feature. `AUTH-DATA-MODEL.md §6`: "Invites
+are the only way to add a person. One path means one set of edge cases." An account is created by
+redeeming an invite, and the sign-in screen says so.
+
+A public registration route would also be a denial of service against our own users. Register
+`dana@acme.test` first, and when the real Dana is later invited to that address the invite cannot be
+accepted, because the address is held by someone who was never entitled to it. No credentials
+needed, and the target is a named colleague. Invite-only is the specified design and the safer one,
+so this one stays as it is.
+
 ## Open threads
 
 Things I know are wrong, unfinished, or that I would do differently. Listed honestly because they

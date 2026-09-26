@@ -493,6 +493,94 @@ input[readonly] { background: var(--sunken); color: var(--ink-2); }
 .perms { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 
 /* ---------------------------------------------------------------------------
+   Create organization
+   --------------------------------------------------------------------------- */
+/* A scrim rather than a centred card, because the thing being created is an ORGANIZATION and the
+   screen behind still shows the current one. Dimming it keeps the context. */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 21, 32, .42);
+  animation: scrim-in 120ms ease-out;
+}
+@keyframes scrim-in { from { opacity: 0 } to { opacity: 1 } }
+
+.dialog {
+  width: 100%;
+  max-width: 480px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: 0 24px 60px -20px rgba(15, 21, 32, .45);
+  padding: 24px 24px 20px;
+  animation: dialog-in 140ms cubic-bezier(.2, 0, .2, 1);
+}
+@keyframes dialog-in { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+
+.dialog__title { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.016em; }
+.dialog__sub { margin: 5px 0 18px; color: var(--ink-3); font-size: 13.5px; }
+.dialog__problem {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--deny);
+  background: var(--deny-bg);
+  border: 1px solid #f0cdc9;
+  border-radius: var(--r-sm);
+  padding: 7px 9px;
+}
+.dialog__actions {
+  display: flex; justify-content: flex-end; gap: 8px;
+  margin-top: 20px; padding-top: 16px;
+  border-top: 1px solid var(--line-2);
+}
+
+/* The six themes as swatches. Each swatch paints the organization's own shell colour, so the choice
+   is a preview of the thing being chosen rather than a coloured square with a name beside it. */
+.themes { border: 0; padding: 0; margin: 18px 0 0; }
+.themes legend {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+  font-weight: 600; color: var(--ink-3); padding: 0 0 8px;
+}
+.themes__row { display: flex; flex-wrap: wrap; gap: 6px; }
+.themes__opt {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 10px 6px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  color: var(--ink-2);
+  font: inherit; font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color var(--t), background var(--t), color var(--t);
+}
+.themes__opt:hover { border-color: var(--ink-3); color: var(--ink); }
+.themes__opt--on { border-color: var(--accent); background: var(--tint); color: var(--accent); font-weight: 570; }
+.themes__swatch { width: 14px; height: 14px; border-radius: 3px; flex: none; border: 1px solid rgba(15,21,32,.12); }
+.themes__swatch--auto { background: linear-gradient(135deg, var(--accent-2) 50%, var(--tint) 50%); }
+.themes__swatch--cobalt { background: #eaeff9; }
+.themes__swatch--amber  { background: #fbf2e2; }
+.themes__swatch--moss   { background: #ecf4ea; }
+.themes__swatch--plum   { background: #f4ecf7; }
+.themes__swatch--rust   { background: #faece7; }
+.themes__swatch--teal   { background: #e6f4f3; }
+
+/* The zero-organization state. Reachable when every membership a person had is removed or
+   suspended, and it used to render an empty shell with no way forward. */
+.nothing {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+  max-width: 46ch;
+  padding: 8px 0 20px;
+}
+.nothing__title { margin: 0; font-size: 17px; font-weight: 640; letter-spacing: -.016em; }
+.nothing__body { margin: 0; color: var(--ink-2); font-size: 14px; line-height: 1.55; }
+.nothing__note { margin: 0; color: var(--ink-3); font-size: 13px; line-height: 1.55; }
+.nothing__actions { display: flex; gap: 8px; margin-top: 6px; }
+
+/* ---------------------------------------------------------------------------
    Sign-in
    --------------------------------------------------------------------------- */
 /* A split gate rather than a card floating in grey: the premise on one side,

@@ -231,6 +231,41 @@ test('a server that ALWAYS says TOKEN_STALE does not loop forever', async ({ pag
 // ---------------------------------------------------------------------------
 // A shipped control that lies, an N+1, and a boot that can hang.
 
+// PERMISSIONS.md 5 documents `CONFLICT | 409 | duplicate name`, and `organizations.name` has no
+// UNIQUE index, so nothing in the schema produces it. It has to be an application check, and the
+// first version of that check was wrong in a way no test noticed: it excluded the caller's CURRENT
+// org from the lookup, so the first organization created with the name of the one you are looking
+// at was accepted and only the second duplicate was caught. The create-org form's own test found
+// it, and this is the direct API-level version of the same regression.
+test('a duplicate name is refused even when it is the name of the org you are in', async ({ page }) => {
+  const { token } = await (await page.request.post('/v1/auth/login', { data: { email: 'dana@example.test', password: 'demo1234' } })).json();
+  const auth = { authorization: `Bearer ${token}` };
+
+  // dana is currently in Acme, and Acme is called 'Acme Robotics'. Copying the name you can see on
+  // screen is the single most likely thing a person does here, and it is the one case the old
+  // query could never catch.
+  // /v1/auth/me is what reports the org the token is actually scoped to, which is the only
+  // definition of 'the current org' worth asserting against.
+  const me = await (await page.request.get('/v1/auth/me', { headers: auth })).json();
+  expect(me.org.name, 'the scoped org has a name to copy').toBeTruthy();
+  const current = me.org;
+
+  const same = await page.request.post('/v1/orgs', { headers: auth, data: { name: current.name } });
+  expect(same.status(), await same.text()).toBe(409);
+  expect((await same.json()).error).toMatchObject({ code: 'CONFLICT', reason: 'duplicate_name' });
+
+  // Case-insensitive, as the COLLATE NOCASE in the lookup promises: the check must not be defeated
+  // by capitalisation, which is the obvious way to try to get a second one past.
+  const shouty = await page.request.post('/v1/orgs', { headers: auth, data: { name: current.name.toUpperCase() } });
+  expect(shouty.status(), 'capitalisation must not bypass the duplicate check').toBe(409);
+
+  // And the fix must not have broken the happy path: a new name still creates, and still gets a
+  // theme. A check that refused everything would pass the two assertions above.
+  const fresh = await page.request.post('/v1/orgs', { headers: auth, data: { name: 'Unique Name Contract' } });
+  expect(fresh.status(), await fresh.text()).toBe(201);
+  expect((await fresh.json()).id).toMatch(/^org_/);
+});
+
 test('the audit pager actually pages', async ({ page }) => {
   // Needs more than one page of events, so drive the API directly first and then count requests.
   const auth = await page.request.post('/v1/auth/login', { data: { email: 'dana@example.test', password: 'demo1234' } });

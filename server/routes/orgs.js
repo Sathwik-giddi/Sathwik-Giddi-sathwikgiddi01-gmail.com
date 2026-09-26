@@ -23,7 +23,11 @@ import { createResolver } from '../permissions.js';
 // The six themes `scripts/personalise.js` draws from, for orgs this app creates. A new org needs a
 // theme because `data-org-theme` is a required console attribute; the value only has to be
 // distinct enough that the console renders a visibly different org.
-const THEMES = ['cobalt', 'amber', 'moss', 'plum', 'rust', 'teal'];
+// Exported because `GET /v1/reference` serves the same list to the console's create-organization
+// form. One array, so the list a person can pick from and the list `POST /v1/orgs` accepts are
+// provably the same list.
+export const ORGANIZATION_THEMES = ['cobalt', 'amber', 'moss', 'plum', 'rust', 'teal'];
+const THEMES = ORGANIZATION_THEMES;
 
 const orgRow = (org) => ({ id: org.id, name: org.name, theme: org.theme, max_session_minutes: org.max_session_minutes, created_at: org.created_at });
 
@@ -58,9 +62,18 @@ export function register(router) {
     // which is a far smaller problem than never emitting the documented status at all. The race is
     // stated in DECISIONS.md rather than hidden, and the case it does not cover -- two orgs with
     // the same name created at the same instant -- is a cosmetic duplicate, not a security one.
+    //
+    // There is deliberately NO `id <> ?` exclusion here. This query used to carry one, excluding
+    // `ctx.orgId`, and it was quietly wrong: the org being created does not exist yet, so its id
+    // cannot match anything, while the caller's CURRENT org is a perfect candidate for a clash. So
+    // the exclusion removed exactly the row most likely to collide, and the first organization
+    // created with the name of the one you are currently looking at was accepted. Only the second
+    // duplicate was caught, because by then another row carried the name. Found by the create-org
+    // form's own duplicate-name test, which is the first thing in this repository that tried to
+    // create a same-named organization.
     const clash = ctx.db.prepare(
-      'SELECT id FROM organizations WHERE name = ? COLLATE NOCASE AND deleted_at IS NULL AND id <> ?'
-    ).get(name, ctx.orgId);
+      'SELECT id FROM organizations WHERE name = ? COLLATE NOCASE AND deleted_at IS NULL'
+    ).get(name);
     if (clash) {
       // Built directly rather than via `conflict(msg, code)`, whose second argument is the CODE and
       // which leaves `reason` null. The documented code is `CONFLICT` and the specific cause belongs

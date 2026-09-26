@@ -187,7 +187,9 @@ export const reference = () => get('/v1/reference');
 // --- orgs, members, audit ---------------------------------------------------
 
 export const listOrgs = () => get('/v1/orgs');
-export const createOrg = (name) => post('/v1/orgs', { name });
+// `theme` was accepted by the endpoint since Phase 0 and never sent, so the colour was an opaque
+// hash of the name and the person creating an organization never got to choose it.
+export const createOrg = (name, theme) => post('/v1/orgs', theme ? { name, theme } : { name });
 export const renameOrg = (orgId, name) => patch(`/v1/orgs/${orgId}`, { name });
 export const deleteOrg = (orgId) => del(`/v1/orgs/${orgId}`);
 
