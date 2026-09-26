@@ -85,7 +85,7 @@ export function DevicesCard({ orgId, orgPermissions, devices, orgs = [], onReloa
           </thead>
           <tbody>
             {devices.map((d) => (
-              <DeviceRow key={d.id} orgId={orgId} device={d} orgs={orgs} busy={busy} run={run} onError={onError} />
+              <DeviceRow key={d.id} orgId={orgId} device={d} orgs={orgs} onReload={onReload} />
             ))}
           </tbody>
         </table>
@@ -94,121 +94,356 @@ export function DevicesCard({ orgId, orgPermissions, devices, orgs = [], onReloa
   );
 }
 
-function DeviceRow({ orgId, device, orgs, busy, run, onError }) {
+/**
+ * One device, its six actions, and whatever panel the action opens.
+ *
+ * The six buttons all existed before this and all of them called the API. What they did not do was
+ * show anything, so pressing one looked identical to pressing nothing: the session verbs posted a
+ * row and then left you to find it on another card, and the two destructive verbs used
+ * `window.prompt` and `window.confirm`, which are not part of this application. BRIEF.md 3.2 wants
+ * these actions "from the UI", and a browser dialog is not the UI.
+ *
+ * So each action now opens a panel on the row, and the panel says what happened: for a session, the
+ * id, the times, and the authority snapshot that permitted it, which is the whole point of the
+ * product and was previously only visible on the Sessions card. A refusal is reported in the panel
+ * that caused it rather than in a bar at the top of the page, because "why did my button not work"
+ * is a question about that button.
+ *
+ * Nothing here decides whether an action is allowed. The server is the only authority (D8), so these
+ * panels render whatever the server said and explain a refusal; they never pre-empt it. In
+ * particular the three session verbs are still gated on the mode's own permission and NOT on
+ * `session:start`, because a device-scoped `device:control` grant with no `session:start` is a real
+ * state (the shipped fixture has exactly one) and hiding the button would hide the demonstration.
+ * The 403 arrives, and the panel says which of the two permissions was missing.
+ */
+function DeviceRow({ orgId, device, orgs, onReload }) {
   const p = device.permissions;
+  const [panel, setPanel] = useState(null);      // null | 'session' | 'transfer' | 'decommission'
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(device.name);
+  const [problem, setProblem] = useState(null);  // the open panel's own failure, in place
+  const [session, setSession] = useState(null);  // the session this row started
+  const [mode, setMode] = useState('view');
+  const [toOrg, setToOrg] = useState('');
+  const [working, setWorking] = useState(false);
+  const [renameProblem, setRenameProblem] = useState(null);
+
+  const close = () => { setPanel(null); setProblem(null); setSession(null); setToOrg(''); };
+
+  /**
+   * Panel work reports its own errors. `run()` sends them to the page-level bar, which is right for
+   * a row action with nowhere to put a message and wrong for a panel the user is looking at.
+   */
+  const attempt = async (fn, sink = setProblem) => {
+    setWorking(true);
+    sink(null);
+    try { await fn(); }
+    catch (err) { sink({ message: err.human ?? err.message, code: err.code }); }
+    finally { setWorking(false); }
+  };
+
+  const startSession = (m) => {
+    // The panel opens on the click, not after the round trip, so the button visibly responds.
+    //
+    // `setSession(null)` used to be here, on the theory that the panel describes the last thing
+    // clicked. It does not work that way: starting Control and then clicking Terminal fails with
+    // DEVICE_BUSY, and clearing first left the panel showing an error and no Stop button for the
+    // Control session that was still running. A refusal must add to what is on screen, not replace
+    // it, so the running session stays and the error is reported above it.
+    setMode(m); setPanel('session'); setProblem(null);
+    return attempt(async () => {
+      setSession(await api.startSession(orgId, device.id, m));
+      await onReload();
+    });
+  };
+
+  const stopSession = () => attempt(async () => {
+    // The response is the ended session, so the panel keeps showing the row it just closed rather
+    // than vanishing and leaving the user unsure whether anything happened.
+    setSession(await api.stopSession(session.id));
+    await onReload();
+  });
+
+  const moveDevice = () => attempt(async () => {
+    await api.transferDevice(orgId, device.id, toOrg);
+    await onReload();
+    close();
+  });
+
+  const decommission = () => attempt(async () => {
+    await api.decommissionDevice(orgId, device.id);
+    await onReload();
+  });
 
   // Which grants touch this row. Read from the server's own provenance rather than recomputed, so
   // the console cannot disagree with the engine about why a button is present.
   const fromGrants = Object.entries(p).filter(([, v]) => v.source?.startsWith('grant:'));
 
+  // A transfer needs a destination, and the only ones that can be offered are the organizations the
+  // caller is already a member of. That is deliberate and it is what keeps this out of the
+  // org-existence probe: the list is `me.orgs`, which the header already renders, so no request is
+  // made to discover whether some other organization exists.
+  const destinations = orgs.filter((o) => o.id !== orgId);
+
+  // Rename keeps its own error rather than using `run()`, for the same reason the panels do: the
+  // form is inline in the cell, and a failure three rows up the page is not an answer to "why did
+  // my new name not save".
+  const saveRename = async () => {
+    if (name.trim() === '') return;
+    await attempt(async () => {
+      await api.renameDevice(orgId, device.id, name.trim());
+      setRenaming(false);
+      // Without this the form closes and the row keeps showing the old name until something else
+      // happens to trigger a reload. It went missing because `run()`, which used to do it, is not
+      // what this calls any more.
+      await onReload();
+    }, (v) => setRenameProblem(v ? v.message : null));
+  };
+
+  const cancelRename = () => { setName(device.name); setRenameProblem(null); setRenaming(false); };
+
   return (
-    // The row is governed by device:view (UI-INVENTORY §3). The row only exists at all when that
-    // permission is held, because the server omits the row otherwise, so it is always "unlocked".
-    <tr data-testid="device-row" data-device-id={device.id} data-kind={device.kind} data-permission="device:view" data-state="unlocked">
-      <td>
-        <div className="cell-name">{device.name}</div>
-        <div className="cell-sub">
-          <code>{device.id}</code>
-          {fromGrants.length > 0 && (
-            <span className="tag tag--grant" title={fromGrants.map(([k, v]) => `${k} ${provenance(v)}`).join('\n')}>
-              +{fromGrants.length} grant{fromGrants.length > 1 ? 's' : ''}
-            </span>
-          )}
-        </div>
-      </td>
-      <td><span className="tag">{device.kind}</span></td>
-      <td>
-        <span className={`dot ${device.online ? 'dot--on' : 'dot--off'}`} aria-label={device.online ? 'online' : 'offline'} />
-        {device.online ? 'online' : 'offline'}
-      </td>
-      <td className="actions">
-        {renaming ? (
-          <>
-            <input value={name} onChange={(e) => setName(e.target.value)} aria-label={`rename ${device.name}`} />
-            <button
-              className="btn btn--primary"
-              disabled={busy === `rename-${device.id}`}
-              onClick={() => run(`rename-${device.id}`, async () => {
-                await api.renameDevice(orgId, device.id, name.trim());
-                setRenaming(false);
-              })}
-            >Save</button>
-          </>
-        ) : (
-          <>
-            {/* The three session verbs act on the same object and are the same verb on it, so they
-                sit as one group rather than as three peer buttons. `.actgroup .perm::after` draws
-                the provenance rule: solid from the role, dashed from a grant. That is the point of
-                the whole application and it used to be reachable only by hovering a `title`. */}
-            <div className="actgroup">
-              <PermButton permissions={p} permission="device:view" source={verdict(p, 'device:view')?.source} data-testid="start-view" title={`View ${device.name} · ${provenance(verdict(p, 'device:view'))}`}
-                onClick={() => run(`view-${device.id}`, () => api.startSession(orgId, device.id, 'view').catch(surfaceError(onError)))}>
-                View
-              </PermButton>
-              <PermButton permissions={p} permission="device:control" source={verdict(p, 'device:control')?.source} data-testid="start-control" title={`Control ${device.name} · ${provenance(verdict(p, 'device:control'))}`}
-                onClick={() => run(`control-${device.id}`, () => api.startSession(orgId, device.id, 'control').catch(surfaceError(onError)))}>
-                Control
-              </PermButton>
-              <PermButton permissions={p} permission="device:terminal" source={verdict(p, 'device:terminal')?.source} data-testid="start-terminal" title={`Terminal ${device.name} · ${provenance(verdict(p, 'device:terminal'))}`}
-                onClick={() => run(`terminal-${device.id}`, () => api.startSession(orgId, device.id, 'terminal').catch(surfaceError(onError)))}>
-                Terminal
-              </PermButton>
+    <>
+      <tr data-testid="device-row" data-device-id={device.id} data-kind={device.kind} data-permission="device:view" data-state="unlocked">
+        <td>
+          <div className="cell-name">{device.name}</div>
+          <div className="cell-sub">
+            <code>{device.id}</code>
+            {fromGrants.length > 0 && (
+              <span className="tag tag--grant" title={fromGrants.map(([k, v]) => `${k} ${provenance(v)}`).join('\n')}>
+                +{fromGrants.length} grant{fromGrants.length > 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+        </td>
+        <td><span className="tag">{device.kind}</span></td>
+        <td>
+          <span className={`dot ${device.online ? 'dot--on' : 'dot--off'}`} aria-label={device.online ? 'online' : 'offline'} />
+          {device.online ? 'online' : 'offline'}
+        </td>
+        <td>
+          <div className="actions">
+            {renaming ? (
+              <div className="rename">
+                <input
+                  data-testid="rename-device-name"
+                  value={name}
+                  onChange={(e) => { setName(e.target.value); setRenameProblem(null); }}
+                  aria-label={`rename ${device.name}`}
+                />
+                <button
+                  data-testid="rename-device-save"
+                  className="btn btn--primary"
+                  // Was enabled on an empty field, which sent a request the server answers 400.
+                  // A rename to nothing is not a rename, so the button says so instead.
+                  disabled={working || name.trim() === ''}
+                  onClick={saveRename}
+                >Save</button>
+                {/* There was no way out of the rename form except saving it. */}
+                <button data-testid="rename-device-cancel" className="btn" onClick={cancelRename}>
+                  Cancel
+                </button>
+                {renameProblem && (
+                  <p className="rename__problem" role="alert" data-testid="rename-device-error">
+                    {renameProblem}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <>
+                {/* The three session verbs act on the same object and are the same verb on it, so they
+                    sit as one group rather than as three peer buttons. `.actgroup .perm::after` draws
+                    the provenance rule: solid from the role, dashed from a grant. That is the point of
+                    the whole application and it used to be reachable only by hovering a `title`. */}
+                <div className="actgroup">
+                  <PermButton permissions={p} permission="device:view" source={verdict(p, 'device:view')?.source} data-testid="start-view" title={`View ${device.name} · ${provenance(verdict(p, 'device:view'))}`}
+                    onClick={() => startSession('view')}>
+                    View
+                  </PermButton>
+                  <PermButton permissions={p} permission="device:control" source={verdict(p, 'device:control')?.source} data-testid="start-control" title={`Control ${device.name} · ${provenance(verdict(p, 'device:control'))}`}
+                    onClick={() => startSession('control')}>
+                    Control
+                  </PermButton>
+                  <PermButton permissions={p} permission="device:terminal" source={verdict(p, 'device:terminal')?.source} data-testid="start-terminal" title={`Terminal ${device.name} · ${provenance(verdict(p, 'device:terminal'))}`}
+                    onClick={() => startSession('terminal')}>
+                    Terminal
+                  </PermButton>
+                </div>
+                <PermButton permissions={p} permission="device:file_transfer" data-testid="transfer-files" title={`Transfer files · ${provenance(verdict(p, 'device:file_transfer'))}`}
+                  onClick={() => { setPanel('transfer'); setProblem(null); setToOrg(''); }}>
+                  Transfer
+                </PermButton>
+                <PermButton permissions={p} permission="device:update" data-testid="rename-device" title={`Rename · ${provenance(verdict(p, 'device:update'))}`}
+                  onClick={() => { setName(device.name); setRenaming(true); }}>
+                  Rename
+                </PermButton>
+                {/* Decommission stops a machine responding for good. It is pushed to the far end of the
+                    row and drawn as a text action, so it cannot be misread as a peer of "View". */}
+                <PermButton permissions={p} permission="device:provision" data-testid="decommission-device" title={`Decommission · ${provenance(verdict(p, 'device:provision'))}`}
+                  className="danger"
+                  onClick={() => { setPanel('decommission'); setProblem(null); }}>
+                  Decommission
+                </PermButton>
+              </>
+            )}
+          </div>
+        </td>
+      </tr>
+
+      {panel === 'session' && (
+        <tr className="panel-row">
+          <td colSpan={4} className="panel" data-testid="session-panel" data-session-id={session?.id ?? ''} data-mode={mode}>
+            <div className="panel__head">
+              <span className={`tag tag--${mode}`}>{mode}</span>
+              <span className="panel__title">
+                {session ? `Session on ${device.name}` : `Starting a ${mode} session on ${device.name}…`}
+              </span>
+              <button data-testid="session-panel-close" className="btn btn--ghost" onClick={close}>Close</button>
             </div>
-            <PermButton permissions={p} permission="device:file_transfer" data-testid="transfer-files" title={`Transfer files · ${provenance(verdict(p, 'device:file_transfer'))}`}
-              onClick={() => run(`xfer-${device.id}`, () => startTransfer(orgId, device, orgs))}>
-              Transfer
-            </PermButton>
-            <PermButton permissions={p} permission="device:update" data-testid="rename-device" title={`Rename · ${provenance(verdict(p, 'device:update'))}`}
-              onClick={() => { setName(device.name); setRenaming(true); }}>
-              Rename
-            </PermButton>
-            {/* Decommission stops a machine responding for good. It is pushed to the far end of the
-                row and drawn as a text action, so it cannot be misread as a peer of "View". */}
-            <PermButton permissions={p} permission="device:provision" data-testid="decommission-device" title={`Decommission · ${provenance(verdict(p, 'device:provision'))}`}
-              className="danger"
-              onClick={() => run(`decom-${device.id}`, async () => {
-                if (!window.confirm(`Decommission ${device.name}? It stops responding to sessions.`)) return;
-                await api.decommissionDevice(orgId, device.id);
-              })}>
-              Decommission
-            </PermButton>
-          </>
-        )}
-      </td>
-    </tr>
+
+            {session && (
+              <>
+                <dl className="panel__facts">
+                  <div><dt>Session</dt><dd><code data-testid="session-panel-id">{session.id}</code></dd></div>
+                  <div><dt>Started</dt><dd>{fmtTime(session.started_at)}</dd></div>
+                  <div><dt>Expires</dt><dd>{fmtTime(session.expires_at)}</dd></div>
+                  <div>
+                    <dt>Authority</dt>
+                    <dd data-testid="session-panel-authority" data-authority-role={session.authorized_by?.role ?? ''}
+                      data-authority-grants={(session.authorized_by?.grantIds ?? []).join(',')}>
+                      {describeAuthority(session)}
+                    </dd>
+                  </div>
+                </dl>
+                {session.state === 'active' ? (
+                  <button data-testid="stop-device-session" className="perm" disabled={working}
+                    onClick={stopSession}>
+                    Stop session
+                  </button>
+                ) : (
+                  <p className="panel__line" data-testid="session-panel-ended">
+                    This session has ended{session.end_reason ? `: ${session.end_reason.replaceAll('_', ' ')}` : ''}.
+                  </p>
+                )}
+              </>
+            )}
+
+            <p className="panel__note">
+              This is the session this button started. Every live session is listed on the Sessions card.
+            </p>
+            {!device.online && (
+              <p className="panel__note">
+                {device.name} is offline, so nothing will answer the session. The record is still real
+                and still audited.
+              </p>
+            )}
+            {problem && <p className="panel__problem" role="alert" data-error-code={problem.code}>{problem.message}</p>}
+          </td>
+        </tr>
+      )}
+
+      {panel === 'transfer' && (
+        <tr className="panel-row">
+          <td colSpan={4} className="panel" data-testid="transfer-panel">
+            <div className="panel__head">
+              <span className="panel__title">Move {device.name}</span>
+              <button data-testid="transfer-panel-close" className="btn btn--ghost" onClick={close}>Close</button>
+            </div>
+
+            {destinations.length === 0 ? (
+              // Said here rather than in a `window.alert`, which is what this used to do. An alert
+              // names a condition the user cannot fix, so it should arrive attached to the button
+              // that revealed it and stay put.
+              <p className="panel__note" data-testid="transfer-nowhere">
+                You are not a member of any other organization, so there is nowhere to move {device.name} to.
+                Join or create one first.
+              </p>
+            ) : (
+              <>
+                <fieldset className="choices">
+                  <legend>Destination</legend>
+                  {destinations.map((o) => (
+                    <label key={o.id} className="choice">
+                      <input
+                        type="radio"
+                        name={`xfer-${device.id}`}
+                        data-testid={`transfer-option-${o.id}`}
+                        checked={toOrg === o.id}
+                        onChange={() => setToOrg(o.id)}
+                      />
+                      <span className="choice__name">{o.name}</span>
+                      <span className="tag">{o.role}</span>
+                    </label>
+                  ))}
+                </fieldset>
+                <p className="panel__note">Any live session on {device.name} ends when it moves.</p>
+                <div className="panel__actions">
+                  <button data-testid="transfer-submit" className="btn btn--primary"
+                    disabled={working || toOrg === ''} onClick={moveDevice}>
+                    Move device
+                  </button>
+                  <button data-testid="transfer-cancel" className="btn" onClick={close}>Cancel</button>
+                </div>
+              </>
+            )}
+            {/* Named, because the refusal is about the DESTINATION and not about this row. The
+                server's message is `missing device:provision` on its own, which reads like the
+                device is the problem. It is not: it is the role held over there.
+                Pre-empting it instead would mean deciding in the client that a viewer cannot move a
+                device, and the only table of which role holds which permission lives in the
+                database. Encoding it here is the one thing this console does not do. */}
+            {problem && (
+              <p className="panel__problem" role="alert" data-error-code={problem.code}>
+                {destinations.find((o) => o.id === toOrg)?.name ?? 'That organization'} refused the move: {problem.message}
+              </p>
+            )}
+          </td>
+        </tr>
+      )}
+
+      {panel === 'decommission' && (
+        <tr className="panel-row">
+          <td colSpan={4} className="panel panel--danger" data-testid="decommission-panel">
+            <div className="panel__head">
+              <span className="panel__title">Decommission {device.name}</span>
+              <button data-testid="decommission-panel-close" className="btn btn--ghost" onClick={close}>Close</button>
+            </div>
+            <ul className="panel__list">
+              <li><code>{device.id}</code> stops appearing in this organization.</li>
+              <li>Any live session on it ends immediately.</li>
+              <li>There is no way to undo this from the console.</li>
+            </ul>
+            <div className="panel__actions">
+              <button data-testid="decommission-confirm" className="perm danger" disabled={working}
+                onClick={decommission}>
+                Decommission
+              </button>
+              <button data-testid="decommission-cancel" className="btn" onClick={close}>Keep it</button>
+            </div>
+            {problem && <p className="panel__problem" role="alert" data-error-code={problem.code}>{problem.message}</p>}
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
 /**
- * A transfer needs a destination. It used to `window.prompt` for an ORGANIZATION ID, which is
- * unusable without already knowing an id out of band, and it is also the one place a user could
- * accidentally walk into the org-existence probe. So the destination is chosen from a list the user
- * can actually see, fetched from an endpoint that is already scoped to their own orgs.
+ * What permitted this session, in the console's own words.
+ *
+ * `authorized_by` is the snapshot the engine took at the moment the session was created, so it is
+ * the answer to "why was I allowed to do that" at the time it was asked, which is not necessarily
+ * the answer now. The Sessions card reduces this to the words "via grant"; a panel opened from the
+ * button that caused the session should show the ids.
  */
-function startTransfer(orgId, device, orgs) {
-  const choices = orgs.filter((o) => o.id !== orgId);
-  if (choices.length === 0) {
-    window.alert(`${device.name} cannot be moved: you are not a member of any other organization.`);
-    return Promise.resolve();
-  }
-  const lines = choices.map((o, i) => `  ${i + 1}. ${o.name}`).join('\n');
-  const answer = window.prompt(`Move ${device.name} to which organization?\n${lines}\n\nEnter a number:`, '1');
-  if (answer === null) return Promise.resolve();
-  const chosen = choices[Number(answer.trim()) - 1];
-  if (!chosen) {
-    window.alert('That is not one of the organizations you belong to.');
-    return Promise.resolve();
-  }
-  return api.transferDevice(orgId, device.id, chosen.id);
+function describeAuthority(session) {
+  const a = session.authorized_by;
+  if (!a) return 'Recorded without an authority snapshot.';
+  const grants = a.grantIds ?? [];
+  if (grants.length === 0) return `Role ${a.role}.`;
+  return `Role ${a.role}, through ${grants.length} grant${grants.length > 1 ? 's' : ''}: ${grants.join(', ')}.`;
 }
 
-// A session needs both permissions. When the server refuses, the button was rendered from a set
-// that has since changed, so the row's provenance may be stale, but `run()` already reloads after
-// every action, so this only has to SURFACE the error. It used to fetch the device list and throw
-// the result away, which was a wasted request and fired onError from two places for one failure.
-const surfaceError = (onError) => (err) => { onError(err); };
 
 // ===========================================================================
 // People
@@ -310,27 +545,29 @@ export function PeopleCard({ orgId, orgPermissions, members, onReload, onError, 
                 {!allows(orgPermissions, 'user:role:update') && <span className="tag">{m.role}</span>}
               </td>
               <td><span className={`tag tag--${m.status}`}>{m.status}</span></td>
-              <td className="actions">
-                <IfAllowed permissions={orgPermissions} permission="user:remove">
-                  {m.status === 'suspended' ? (
-                    <PermButton permissions={orgPermissions} permission="user:remove" data-testid="suspend-user"
-                      onClick={() => run(`susp-${m.user_id}`, () => api.reinstateMember(orgId, m.user_id))}>
-                      Reinstate
+              <td>
+                <div className="actions">
+                  <IfAllowed permissions={orgPermissions} permission="user:remove">
+                    {m.status === 'suspended' ? (
+                      <PermButton permissions={orgPermissions} permission="user:remove" data-testid="suspend-user"
+                        onClick={() => run(`susp-${m.user_id}`, () => api.reinstateMember(orgId, m.user_id))}>
+                        Reinstate
+                      </PermButton>
+                    ) : (
+                      <PermButton permissions={orgPermissions} permission="user:remove" data-testid="suspend-user"
+                        onClick={() => run(`susp-${m.user_id}`, () => api.suspendMember(orgId, m.user_id))}>
+                        Suspend
+                      </PermButton>
+                    )}
+                    <PermButton permissions={orgPermissions} permission="user:remove" className="danger" data-testid="remove-user"
+                      onClick={() => run(`rm-${m.user_id}`, async () => {
+                        if (!window.confirm(`Remove ${m.name} from this organization?`)) return;
+                        await api.removeMember(orgId, m.user_id);
+                      })}>
+                      Remove
                     </PermButton>
-                  ) : (
-                    <PermButton permissions={orgPermissions} permission="user:remove" data-testid="suspend-user"
-                      onClick={() => run(`susp-${m.user_id}`, () => api.suspendMember(orgId, m.user_id))}>
-                      Suspend
-                    </PermButton>
-                  )}
-                  <PermButton permissions={orgPermissions} permission="user:remove" className="danger" data-testid="remove-user"
-                    onClick={() => run(`rm-${m.user_id}`, async () => {
-                      if (!window.confirm(`Remove ${m.name} from this organization?`)) return;
-                      await api.removeMember(orgId, m.user_id);
-                    })}>
-                    Remove
-                  </PermButton>
-                </IfAllowed>
+                  </IfAllowed>
+                </div>
               </td>
             </tr>
           ))}
@@ -459,19 +696,21 @@ export function GrantsCard({ orgId, orgPermissions, grants, members, devices, on
                     : g.permissions.map((p) => <span key={p} className="tag tag--perm">{p}</span>)}
                   {g.expires_at && !g.revoked_at && <div className="cell-sub">until {fmtTime(g.expires_at)}</div>}
                 </td>
-                <td className="actions">
-                  <IfAllowed permissions={orgPermissions} permission="grant:revoke">
-                    {!g.revoked_at && (
-                      <button
-                        data-testid="revoke-grant"
-                        data-grant-id={g.id}
-                        className="perm danger"
-                        onClick={() => run(`revoke-${g.id}`, () => api.revokeGrant(orgId, g.id))}
-                      >
-                        Revoke
-                      </button>
-                    )}
-                  </IfAllowed>
+                <td>
+                  <div className="actions">
+                    <IfAllowed permissions={orgPermissions} permission="grant:revoke">
+                      {!g.revoked_at && (
+                        <button
+                          data-testid="revoke-grant"
+                          data-grant-id={g.id}
+                          className="perm danger"
+                          onClick={() => run(`revoke-${g.id}`, () => api.revokeGrant(orgId, g.id))}
+                        >
+                          Revoke
+                        </button>
+                      )}
+                    </IfAllowed>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -573,7 +812,7 @@ function NewGrantForm({ orgId, orgPermissions, members, devices, reference, busy
 // ===========================================================================
 // Sessions
 // ===========================================================================
-export function SessionsCard({ orgId, orgPermissions, sessions, devices, onReload, onError }) {
+export function SessionsCard({ orgId, orgPermissions, sessions, devices, reference, onReload, onError }) {
   const [busy, setBusy] = useState(null);
   const [starting, setStarting] = useState(false);
   const [deviceId, setDeviceId] = useState('');
@@ -589,12 +828,17 @@ export function SessionsCard({ orgId, orgPermissions, sessions, devices, onReloa
   // Only offer modes the caller can actually open ON THE CHOSEN DEVICE, the same compound check the
   // server makes, computed from the per-row permissions it already sent. The server still enforces
   // it; this only avoids offering a button that is guaranteed to fail.
+  //
+  // The mode list and the mode -> permission map both come from the server. They were hardcoded
+  // here, twice, which is the one thing that let this card drift from `assertCanStartSession`: add a
+  // fourth mode on the server and this would offer three, or offer a mode whose permission the
+  // engine no longer requires.
+  const ALL_MODES = reference?.modes ?? [];
+  const MODE_PERMISSION = reference?.modePermissions ?? {};
   const target = devices.find((d) => d.id === deviceId);
   const modes = target
-    ? ['view', 'control', 'terminal'].filter((m) => {
-        const modePerm = { view: 'device:view', control: 'device:control', terminal: 'device:terminal' }[m];
-        return allows(target.permissions, 'session:start') && allows(target.permissions, modePerm);
-      })
+    ? ALL_MODES.filter((m) =>
+        allows(target.permissions, 'session:start') && allows(target.permissions, MODE_PERMISSION[m]))
     : [];
 
   return (
@@ -615,7 +859,7 @@ export function SessionsCard({ orgId, orgPermissions, sessions, devices, onReloa
             {devices.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
           </select>
           <select value={mode} onChange={(e) => setMode(e.target.value)} aria-label="session mode" disabled={modes.length === 0}>
-            {['view', 'control', 'terminal'].map((m) => <option key={m} value={m}>{m}</option>)}
+            {ALL_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
           <button
             className="btn btn--primary"
@@ -668,23 +912,25 @@ export function SessionsCard({ orgId, orgPermissions, sessions, devices, onReloa
                 </td>
                 <td className="cell-sub">{fmtTime(s.started_at)}</td>
                 <td className="cell-sub">{fmtTime(s.expires_at)}</td>
-                <td className="actions">
-                  {/* Your own session, or session:terminate. The server decides which applies and
-                      the button carries the permission it was rendered for, so a hidden button here
-                      is a real absence rather than a disabled control. */}
-                  {/* Governed by OWNERSHIP, not by a permission (UI-INVENTORY §3: "your own
-                      session"), so it carries no data-permission, there is no permission to name.
-                      It is still gated: the server decides, and `can_stop` in the list response is
-                      the server's own answer. */}
-                  {s.state === 'active' && s.is_mine && (
-                    <button data-testid="stop-session" data-session-id={s.id} className="perm"
-                      onClick={() => run(`stop-${s.id}`, () => api.stopSession(s.id))}>Stop</button>
-                  )}
-                  {s.state === 'active' && !s.is_mine && allowsAny(orgPermissions, ['session:terminate']) && (
-                    <button data-permission="session:terminate" data-state="unlocked" data-testid="stop-session"
-                      data-session-id={s.id} className="perm danger"
-                      onClick={() => run(`stop-${s.id}`, () => api.stopSession(s.id))}>End</button>
-                  )}
+                <td>
+                  <div className="actions">
+                    {/* Your own session, or session:terminate. The server decides which applies and
+                        the button carries the permission it was rendered for, so a hidden button here
+                        is a real absence rather than a disabled control. */}
+                    {/* Governed by OWNERSHIP, not by a permission (UI-INVENTORY §3: "your own
+                        session"), so it carries no data-permission, there is no permission to name.
+                        It is still gated: the server decides, and `can_stop` in the list response is
+                        the server's own answer. */}
+                    {s.state === 'active' && s.is_mine && (
+                      <button data-testid="stop-session" data-session-id={s.id} className="perm"
+                        onClick={() => run(`stop-${s.id}`, () => api.stopSession(s.id))}>Stop</button>
+                    )}
+                    {s.state === 'active' && !s.is_mine && allowsAny(orgPermissions, ['session:terminate']) && (
+                      <button data-permission="session:terminate" data-state="unlocked" data-testid="stop-session"
+                        data-session-id={s.id} className="perm danger"
+                        onClick={() => run(`stop-${s.id}`, () => api.stopSession(s.id))}>End</button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}

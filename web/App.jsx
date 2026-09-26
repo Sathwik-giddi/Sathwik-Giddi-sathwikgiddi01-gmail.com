@@ -378,7 +378,7 @@ function Shell({ me, onReload, onSignOut }) {
             <GrantsCard orgId={orgId} orgPermissions={permissions} grants={data.grants ?? []} members={data.members ?? []} devices={data.devices ?? []} onReload={reload} onError={setError} reference={reference} />
           )}
           {current?.key === 'sessions' && (
-            <SessionsCard orgId={orgId} orgPermissions={permissions} sessions={data.sessions ?? []} devices={data.devices ?? []} onReload={reload} onError={setError} />
+            <SessionsCard orgId={orgId} orgPermissions={permissions} sessions={data.sessions ?? []} devices={data.devices ?? []} reference={reference} onReload={reload} onError={setError} />
           )}
           {current?.key === 'audit' && (
             <AuditCard

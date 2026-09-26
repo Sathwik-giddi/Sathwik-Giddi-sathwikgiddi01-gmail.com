@@ -1553,6 +1553,93 @@ accepted, because the address is held by someone who was never entitled to it. N
 needed, and the target is a named colleague. Invite-only is the specified design and the safer one,
 so this one stays as it is.
 
+## Phase 13, the six buttons, which all worked and all did nothing
+
+Asked to make the device buttons useful. They were not broken: every one of them called its
+endpoint, `tests/contract.spec.js` proved each carried the right `data-permission` and
+`data-state`, and `scripts/check-http-seams.js` proved the endpoints behaved. Pressing one looked
+identical to pressing nothing.
+
+- **View, Control, Terminal** posted a session row and returned. Nothing on the row changed. You had
+  to go to the Sessions card to discover that anything had happened, and the authority snapshot that
+  permitted the session, which is the entire thesis of this product, was only visible there.
+- **Transfer** was a `window.prompt` listing the destination organizations as a numbered menu.
+- **Decommission** was a `window.confirm` with one sentence in it.
+- **Rename** worked, could not be cancelled, and would send an empty name to the server.
+
+Two of these were browser dialogs. A native dialog is not keyboard-navigable, is not styled, cannot
+report the one error these forms have, and is invisible to every assertion in the suite.
+
+### What each action does now
+
+Each opens a panel on the row, and the panel says what happened.
+
+A session panel shows the id, the start and expiry, and the authority that permitted it, including
+the grant ids when the session came from one. It has a Stop button, and when you stop it the panel
+stays and says the session has ended rather than vanishing. An exclusive device refuses the second
+mode with the server's own message, naming the holder.
+
+Transfer chooses from a radio list of the organizations you are a member of, shows your role in
+each, and states that live sessions will end. Somebody in one organization is told there is nowhere
+to go, in the panel, instead of a `window.alert`. A refusal names the organization that refused,
+because the server's `missing device:provision` otherwise reads as though the device were at fault.
+
+Decommission lists three consequences and offers "Keep it" next to the button.
+
+### Writing the tests found three bugs, and the tests had to be built first
+
+There was no test in the repository that clicked any of the six. Both layers were covered and the
+join between them was not, which is exactly the shape of defect that lets a `window.prompt` sit in
+the middle of a product for nine phases.
+
+The bugs, all found by clicking rather than by reading:
+
+1. **A refusal destroyed the running session.** Starting Control and then clicking Terminal fails
+   with `DEVICE_BUSY`. My first panel cleared the session on every click, so the second, failed,
+   start left the panel showing an error and no Stop button for the Control session that was still
+   running. A refusal has to add to what is on screen, not replace it.
+2. **Rename stopped refreshing the row.** It used `run()`, which reloads. It no longer does, and
+   nothing had noticed, so the form closed and the row kept the old name until something else
+   happened to trigger a reload.
+3. **The row divider stepped.** `.actions` was `display: flex` on the `<td>` itself, so that cell
+   was 59.8px tall while the other three were 67.5px and its `border-bottom` sat 7px above theirs.
+   A flex container is not a table cell, so it stops participating in the row's height. The flex row
+   moved inside a real `<td>`, in all four cards that have one.
+
+### `npm test` was asserting against whatever was last built
+
+`playwright.config.js` runs the server with `NODE_ENV=production`, which serves `dist/`, and its
+`webServer` command never built. So the suite asserted against whatever the last `npm run build`
+happened to produce. I found this by mutating the source to put a `window.confirm` back, watching
+the "no native dialog" test pass anyway, and rebuilding: the same test then failed with
+`a native dialog opened: confirm`.
+
+A green suite that is testing stale code is worse than no suite, because it is believed. The
+`webServer` command now builds first. That is the second change to that file, after `webServer.env`.
+
+Every new test was then checked by breaking the thing it covers and confirming it fails: the native
+dialog guard, the stranded session, the rename refresh, and the empty-name guard. All four fail when
+the fix is reverted.
+
+### One more client copy of the model
+
+The Sessions card held `['view','control','terminal']` and the mode-to-permission map, hardcoded,
+while the server holds both in `MODE_PERMISSION`. That is the same second copy of the model that
+`themes` was, so `/v1/reference` now serves `modes` and `modePermissions` from that constant, and
+the card reads them. The device row's three buttons do not filter on `session:start`, and that is
+deliberate: a device-scoped `device:control` grant with no `session:start` is a real state and the
+shipped fixture contains one, so hiding the button would hide the demonstration. The 403 arrives and
+the panel says which of the two permissions was missing.
+
+| | before | after |
+|---|---|---|
+| tests that click a device action | 0 | 14 |
+| native dialogs in the device row | `prompt`, `confirm` | none |
+| what a session button shows | nothing | id, times, authority, grant ids, Stop |
+| empty rename | sent to the server, 400 | refused in the field |
+| `npm test` asserts the working tree | no | yes |
+| browser tests | 48 | 62 |
+
 ## Open threads
 
 Things I know are wrong, unfinished, or that I would do differently. Listed honestly because they

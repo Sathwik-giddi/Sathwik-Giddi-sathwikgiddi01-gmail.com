@@ -722,3 +722,123 @@ input[readonly] { background: var(--sunken); color: var(--ink-2); }
   .actions .perm.danger { margin-left: 10px; }
   .actgap { display: none; }
 }
+
+/* ---------------------------------------------------------------------------
+   Row panels. What a device action opened.
+
+   The six buttons used to call the API and return no visible result, so pressing one looked
+   identical to pressing nothing: the session verbs posted a row and left you to find it on another
+   card, and the two destructive verbs used `window.prompt` and `window.confirm`. A panel gives the
+   answer next to the button that asked the question, which is the only place a person looking at a
+   device row is actually looking.
+   --------------------------------------------------------------------------- */
+.panel-row > .panel { padding: 0 14px 14px; }
+
+.panel {
+  background: var(--sunken);
+  border-bottom: 1px solid var(--line-2);
+}
+.panel--danger { background: var(--deny-bg); }
+
+.panel__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 0 9px;
+  border-bottom: 1px solid var(--line-2);
+}
+.panel__title { font-weight: 570; color: var(--ink); flex: 1; }
+.panel__head .btn--ghost { margin-left: auto; }
+
+.panel__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 26px;
+  margin: 11px 0;
+}
+.panel__facts > div { min-width: 0; }
+.panel__facts dt {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+/* 12px, not 11.5px: this is the sentence that says why the session was allowed, and it is the
+   longest string in the panel. It stays on one line at every width the console is used at. */
+.panel__facts dd { margin: 2px 0 0; font-size: 12.5px; color: var(--ink-2); }
+.panel__facts code { font-size: 12px; }
+
+.panel__line { margin: 11px 0; font-size: 12.5px; color: var(--ink-2); }
+.panel__note {
+  margin: 9px 0 0;
+  font-size: 12px;
+  color: var(--ink-3);
+  max-width: 68ch;
+}
+.panel__list {
+  margin: 11px 0;
+  padding-left: 20px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.panel__list li { margin: 3px 0; }
+.panel__actions { display: flex; align-items: center; gap: 8px; margin-top: 11px; }
+
+.panel__problem {
+  margin: 10px 0 0;
+  padding: 8px 11px;
+  border-radius: var(--r-sm);
+  background: var(--deny-bg);
+  color: var(--deny);
+  font-size: 12.5px;
+  max-width: 82ch;
+}
+
+/* Destination chooser. A radio list rather than a <select>, because the two facts that matter
+   (which organization, and what you are in it) have to be readable at the same time. */
+.choices {
+  margin: 11px 0 0;
+  border: 0;
+  padding: 0;
+}
+.choices legend {
+  padding: 0;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 7px 0;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.choice input { accent-color: var(--accent); }
+.choice__name { font-weight: 500; }
+
+/* Rename lives inline in the actions cell, so its one failure has to fit in the cell. */
+.rename { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rename input {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  color: var(--ink);
+  min-width: 150px;
+}
+.rename input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.rename__problem {
+  flex-basis: 100%;
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--deny);
+  max-width: 46ch;
+}

@@ -818,6 +818,48 @@ cosmetic, since it would need a table the schema does not have.
 **What would change my mind:** a specification that adds a registration route, or a deployment where
 the member directory is not reachable by the people being invited.
 
+### A refusal is reported in the panel that caused it, and it does not replace what is already there
+
+**What I chose:** each of the six device actions opens a panel on the row. A refusal is rendered in
+that panel as a `role="alert"` carrying the server's error code, next to the button that was pressed,
+rather than in the page-level error bar. And a failed action adds to the panel rather than clearing
+it: starting Control and then being refused Terminal leaves the running Control session on screen
+with its Stop button.
+
+**Why:** the first version cleared the session on every click, on the reasoning that the panel
+describes the last thing you pressed. That is not what a panel is. The outcome was a user with a
+live Control session, an error about Terminal, and no way to stop the session. `tests/device-actions.spec.js`
+fails if the clearing comes back.
+
+**What I rejected:** routing these errors to the page bar, which is what every other card action
+does. That is right for an action with nowhere to put a message, and wrong for a form the user is
+looking at, where the error is about the field in front of them.
+
+**What would change my mind:** a row with more simultaneous panels than fit, at which point one
+region per row with a list of outcomes would be more honest than whichever panel is open.
+
+---
+
+### The device row does not pre-empt the compound session check
+
+**What I chose:** the three session buttons on a device row are gated on the mode's own permission
+and NOT on `session:start`, so a row can offer Control and still be refused. The 403 is then shown
+in the panel, which names which of the two permissions was missing.
+
+**Why:** `ui.spec.js` has a test for a device-scoped `device:control` grant held by somebody whose
+role has no `session:start` at all, and that is the shipped fixture rather than an invention. Adding
+the compound filter to the row would delete that grant's only visible effect and make the
+demonstration of D6 impossible to see in the product. The Sessions card, which offers a mode
+*chooser* rather than three separate buttons, does apply the compound check, and that is the right
+place for it.
+
+**Why not decide it in the client anyway:** the only table of which role holds which permission lives
+in the database, and encoding it in the console is the one thing this codebase does not do. Same
+reason the transfer panel does not pre-empt its own refusal by hiding organizations where you are a
+viewer: it shows your role beside each one and lets the server answer.
+
+---
+
 ## Deliberately not built
 
 Stated now for the things already decided; this section grows as the build does.

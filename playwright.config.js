@@ -19,7 +19,17 @@ export default defineConfig({
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 
   webServer: {
-    command: 'node scripts/load-db.js && node server/index.js',
+    // `npm run build` added, and this is the second change to this file. The suite serves the
+    // built bundle, because NODE_ENV is production below and production serves `dist/` rather than
+    // the Vite middleware. So `npm test` was asserting against whatever happened to be in `dist/`,
+    // which is whatever the last build produced and nothing more.
+    //
+    // That is not a hypothetical. While writing tests/device-actions.spec.js I mutated the source to
+    // put a `window.confirm` back and the "no native dialog" test still passed, because the bundle
+    // on disk was from before the mutation. A green suite that is testing stale code is worse than
+    // no suite, because it is believed. Building here means every invocation asserts the code in
+    // the working tree, whatever was run to start it.
+    command: 'npm run build && node scripts/load-db.js && node server/index.js',
     url: `http://localhost:${PORT}/v1/auth/me`,
     reuseExistingServer: false,
     timeout: 30_000,

@@ -18,6 +18,7 @@
 import { send, notFound, badRequest, forbidden, normalizeTs, HttpError } from '../http.js';
 import { ORGANIZATION_THEMES } from './orgs.js';
 import { assertSameOrg } from '../context.js';
+import { MODE_PERMISSION } from '../permissions.js';
 import { stmt } from '../internal/sql.js';
 import { newId, nowIso, bumpPermVersion } from '../db.js';
 import { requireString, translateConstraint, unknownPermission, deviceRow, grantRow, LIMITS } from '../internal/http.js';
@@ -362,7 +363,13 @@ export function register(router) {
       permissions: stmt(ctx.db, 'referencePermissions').all(),
       patterns: stmt(ctx.db, 'referencePatterns').all().map((r) => r.pattern),
       roles: stmt(ctx.db, 'allRoles').all(),
-      modes: ['view', 'control', 'terminal'],
+      modes: Object.keys(MODE_PERMISSION),
+      // Which permission each mode needs, beyond `session:start`. The Sessions card used to hold
+      // its own copy of this map, and `['view','control','terminal']` hardcoded a second time
+      // alongside it, so the console could offer a mode the server would refuse. Served from the
+      // constant `assertCanStartSession` reads, so the check the client mirrors is the check the
+      // server runs. Same reasoning as `themes` above.
+      modePermissions: MODE_PERMISSION,
       // The six organization themes, so the create-organization form can offer the choice instead
       // of the client keeping its own copy. Sourced from the SAME array `POST /v1/orgs` validates
       // against, so the list a person can pick from and the list the endpoint accepts are provably
