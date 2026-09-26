@@ -357,6 +357,22 @@ test('a bad invite link is refused without leaking anything', async ({ page }) =
 // ---------------------------------------------------------------------------
 // Failure feedback: a sign-in that fails has to say so, on screen, in words.
 
+// DECISIONS.md asserts that the sign-in screen explains there is no sign-up. It did not, for a
+// while: the screen carried the demo account list and nothing else, so somebody arriving without an
+// account saw no "Register" link and no reason for one, which reads as a missing feature rather than
+// a decision. A claim in prose is not a check, and this pins it.
+test('the sign-in screen says accounts come from an invite, since there is no sign-up', async ({ page }) => {
+  await page.goto('/');
+  const note = page.getByTestId('login-no-signup');
+  await expect(note).toBeVisible();
+  await expect(note).toContainText('no sign-up');
+  await expect(note).toContainText('invite');
+  // It has to point at the control that mints one, or it is a dead end.
+  await expect(note).toContainText('People');
+  // And there is genuinely no registration form anywhere to find, so the sentence is not a lie.
+  await expect(page.locator('input[type="email"], [data-testid="login-email"]')).toHaveCount(1);
+});
+
 test('a failed sign-in states the reason on screen', async ({ page }) => {
   await page.goto('/');
   await page.getByTestId('login-email').fill('dana@example.test');

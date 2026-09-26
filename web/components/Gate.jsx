@@ -103,6 +103,20 @@ export function Login({ onSignedIn, notice }) {
           )}
         </form>
 
+        {/*
+          The invite path, stated on the sign-in screen, because there is no sign-up and the absence
+          of a "Register" link reads as a missing feature rather than a decision.
+
+          This line was missing while DECISIONS.md claimed the sign-in screen said so. It did not.
+          Nothing tested the claim, which is the same class of gap as the device buttons: a thing
+          asserted in prose that no check would have caught. `tests/ui.spec.js` now pins the words.
+        */}
+        <p className="gate__hint" data-testid="login-no-signup">
+          <b>There is no sign-up.</b> Accounts are created by redeeming an invite: an owner or admin
+          sends one from <b>People → Invite</b>, and the link they get back is the only way in.
+          Already have a link? Open it directly.
+        </p>
+
         <p className="gate__hint">
           <b>Demo accounts</b>, all with the password <code>demo1234</code>:<br />
           <code>owner@acme.test</code> sees everything · <code>viewer@acme.test</code> can only

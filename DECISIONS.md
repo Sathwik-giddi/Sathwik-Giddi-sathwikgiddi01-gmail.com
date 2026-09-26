@@ -810,7 +810,14 @@ registration route would also be a denial of service against our own users: regi
 `dana@acme.test` first and, when the real Dana is later invited to that address, the invite can no
 longer be accepted, because the address is held by someone who was never entitled to it. That attack
 needs no credentials and works against a named colleague. Invite-only is both the specified design
-and the safer one, so an account is created by redeeming an invite, and the sign-in screen says so.
+and the safer one, so an account is created by redeeming an invite.
+
+The sign-in screen now says so, and I only found that it did not while checking before a
+submission. This file claimed the screen carried the explanation and it carried nothing but the demo
+account list, so a person arriving with no account saw a form with no "Register" link and no reason
+given, which reads as a missing feature rather than a decision. Nothing tested the claim, which is
+the same gap as the six device buttons: a statement in prose that no check would have caught. It is a
+pinned test now.
 
 **What I rejected:** a signup form, for the reason above. A "request access" form would have been
 cosmetic, since it would need a table the schema does not have.
