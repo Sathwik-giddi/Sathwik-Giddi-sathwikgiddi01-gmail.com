@@ -14,9 +14,25 @@
 let accessToken = null;
 let onUnauthenticated = null;
 
+/**
+ * Which org the token in hand is scoped to.
+ *
+ * This exists because of a bug worth naming. `POST /auth/refresh` cannot know which org you were
+ * in — `refresh_tokens` has no org column — so it re-issues for the caller's default org, which is
+ * the alphabetically first active membership. That token is then used to replay the ORIGINAL
+ * request, which was addressed to a different org, and the server correctly answers 404. The screen
+ * said "not found" for what was a stale token, and the module token was now org A while the app
+ * still believed it was org B, so every later action 404'd until the user clicked something.
+ *
+ * So the recovery path has to put the token back where the caller was before replaying, and this
+ * is what lets it know where that was. Set by `switchOrg` and by any response that reports an org.
+ */
+let activeOrgId = null;
+
 export const getToken = () => accessToken;
 export const setToken = (t) => { accessToken = t ?? null; };
-export const clearToken = () => { accessToken = null; };
+export const clearToken = () => { accessToken = null; activeOrgId = null; };
+export const getActiveOrgId = () => activeOrgId;
 
 /** Registered by the app so a 401 anywhere can drop the console back to the sign-in screen. */
 export const setUnauthenticatedHandler = (fn) => { onUnauthenticated = fn ?? null; };
@@ -46,7 +62,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request(method, path, { body, auth = true, headers = {} } = {}) {
+async function request(method, path, { body, auth = true, headers = {}, retried = false } = {}) {
   const init = { method, headers: { ...headers } };
 
   if (body !== undefined) {
@@ -74,13 +90,26 @@ async function request(method, path, { body, auth = true, headers = {} } = {}) {
 
   if (!res.ok) {
     const error = new ApiError(res.status, payload);
-    // 401 TOKEN_STALE is the server telling us our token no longer describes this membership. The
-    // one automatic recovery: swap it for a fresh one from the refresh cookie and retry once. Any
-    // other 401 means the session is genuinely over, so hand control to the app.
-    if (error.status === 401 && error.code === 'TOKEN_STALE' && !path.includes('/auth/')) {
+
+    // 401 TOKEN_STALE means the token no longer describes this membership. The one automatic
+    // recovery: get a new token and replay the request ONCE.
+    //
+    // `retried` is not decoration. Without it this is unbounded recursion — a server that answers
+    // TOKEN_STALE twice drives the tab into infinite requests, two HTTP calls per level. A
+    // recovery path that can loop is worse than no recovery path, and the guard is one boolean.
+    if (error.status === 401 && error.code === 'TOKEN_STALE' && !path.includes('/auth/') && !retried) {
+      const wanted = activeOrgId;
       const refreshed = await tryRefresh();
-      if (refreshed) return request(method, path, { body, auth, headers });
+      if (refreshed) {
+        // Put the token back in the org the caller was addressing BEFORE replaying. tryRefresh
+        // hands back the default org's token, so without this the replay is a guaranteed 404.
+        if (wanted && getActiveOrgId() !== wanted) {
+          try { await switchOrg(wanted); } catch { /* fall through and let the replay report it */ }
+        }
+        return request(method, path, { body, auth, headers, retried: true });
+      }
     }
+
     if (error.status === 401 && onUnauthenticated) onUnauthenticated(error);
     throw error;
   }
@@ -103,6 +132,9 @@ export async function tryRefresh() {
     if (!res.ok) return false;
     const payload = await res.json();
     accessToken = payload.token;
+    // The refresh re-issues for the DEFAULT org, so this is deliberately not `activeOrgId`. The
+    // caller decides whether to switch back; see the TOKEN_STALE recovery in `request`.
+    activeOrgId = payload.org?.id ?? null;
     return payload;
   } catch {
     return false;
@@ -111,10 +143,20 @@ export async function tryRefresh() {
 
 // --- auth -------------------------------------------------------------------
 
-export const login = (email, password, orgId) => post('/v1/auth/login', { email, password, ...(orgId ? { orgId } : {}) }, { auth: false });
+export async function login(email, password, orgId) {
+  const payload = await post('/v1/auth/login', { email, password, ...(orgId ? { orgId } : {}) }, { auth: false });
+  accessToken = payload.token;
+  activeOrgId = payload.org?.id ?? null;
+  return payload;
+}
 /** 204, no body. `auth: false` because the refresh cookie is the credential. */
 export const logout = () => post('/v1/auth/logout', {}, { auth: false });
-export const me = () => get('/v1/auth/me');
+/** Boot endpoint. Adopts the org it reports, so later TOKEN_STALE recovery knows where to return to. */
+export async function me() {
+  const payload = await get('/v1/auth/me');
+  activeOrgId = payload.org?.id ?? activeOrgId;
+  return payload;
+}
 
 /**
  * Switch org. This mints a NEW token rather than filtering client-side (D18), which is what makes
@@ -128,6 +170,7 @@ export async function switchOrg(orgId) {
   // nothing — `/auth/me` was still being asked with the OLD org's token and dutifully returned the
   // old org. The switch is a token swap, so the swap has to include the token.
   accessToken = payload.token;
+  activeOrgId = orgId;
   return payload;
 }
 

@@ -152,3 +152,78 @@ test('the session row keeps its lifecycle out of data-state', async ({ page }) =
   const lifecycle = await row.getAttribute('data-session-state');
   expect(['active', 'ended', 'connecting']).toContain(lifecycle);
 });
+
+// ---------------------------------------------------------------------------
+// TOKEN_STALE recovery.
+//
+// The console's one automatic recovery: the server says the token no longer
+// describes this membership, so get a new one from the refresh cookie and replay
+// the request. Two things about it are load-bearing and neither was tested:
+//
+//   1. it must be BOUNDED. Unguarded it is unbounded recursion — two HTTP requests
+//      per level, forever, if the server keeps saying TOKEN_STALE.
+//   2. it must replay into the RIGHT ORG. `refresh_tokens` has no org column, so
+//      the refresh hands back the default org's token; replaying the original
+//      org-B request with an org-A token is a guaranteed 404, and the screen then
+//      blames the wrong thing.
+
+test('a stale token is recovered from exactly once, in the right org', async ({ page }) => {
+  const requests = [];
+  page.on('request', (r) => { if (r.url().includes('/v1/')) requests.push(`${r.method()} ${new URL(r.url()).pathname}`); });
+
+  await login(page, 'dana@example.test');
+  // dana is owner in Acme and viewer in Globex, so she can be moved to Globex and stay active.
+  await page.locator('[data-testid="org-option"][data-org-id="org_globex"]').click();
+  await expect(page.getByTestId('app-shell')).toHaveAttribute('data-org-id', 'org_globex');
+
+  // Force the very next request to be TOKEN_STALE, exactly as a role change would.
+  let stale = true;
+  await page.route('**/v1/orgs/org_globex/devices', async (route) => {
+    if (!stale) return route.continue();
+    stale = false;
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'TOKEN_STALE', message: 'token is stale; refresh and retry', reason: null, requestId: 'req_test' } }),
+    });
+  });
+
+  await page.getByTestId('nav-people').click();
+  await page.getByTestId('nav-devices').click();
+
+  // The recovery must land the caller back in Globex, not in the default org.
+  await expect(page.getByTestId('app-shell')).toHaveAttribute('data-org-id', 'org_globex');
+  await expect(page.getByTestId('device-row')).toHaveCount(2);
+
+  // And bounded: the devices endpoint is asked for at most twice (the stale one and the replay).
+  const deviceCalls = requests.filter((r) => r === 'GET /v1/orgs/org_globex/devices');
+  expect(deviceCalls.length, `requests: ${requests.join(', ')}`).toBeLessThanOrEqual(2);
+});
+
+test('a server that ALWAYS says TOKEN_STALE does not loop forever', async ({ page }) => {
+  // Sign in FIRST, then install the route. Installing it before login meant the very first devices
+  // load failed, the recovery correctly gave up, and the console signed itself out — so the helper
+  // was waiting for an app-shell that had legitimately gone. The behaviour under test is the
+  // bound, and the bound is only reachable once there is a session to lose.
+  await login(page, 'dana@example.test');
+
+  let calls = 0;
+  await page.route('**/v1/orgs/**/devices', async (route) => {
+    calls += 1;
+    await route.fulfill({
+      status: 401,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'TOKEN_STALE', message: 'token is stale', reason: null, requestId: 'req_x' } }),
+    });
+  });
+
+  await page.getByTestId('nav-people').click();
+  await page.getByTestId('nav-devices').click();
+  await page.waitForTimeout(1000);
+
+  // One call, one refresh, one replay, then it stops. Without the `retried` guard this climbs
+  // without limit; four is generous for a correct recovery and far below a loop.
+  expect(calls, `devices calls: ${calls}`).toBeLessThanOrEqual(4);
+  // And the refusal is eventually shown rather than swallowed.
+  await expect(page.getByTestId('login-form')).toBeVisible();
+});

@@ -843,6 +843,38 @@ asserting nothing.
 `[data-state="unlocked"]` scoped to a card would quietly match the wrong thing. The lifecycle moved
 to `data-session-state`.
 
+### 10. A recovery path that could loop, replaying into the wrong org
+
+`web/api.js` handles `401 TOKEN_STALE` by refreshing and replaying the request. Two defects, both
+in five lines:
+
+**Unbounded.** There was no "already retried" guard, so a server that answered `TOKEN_STALE` twice
+drove the tab into infinite recursion — two HTTP requests per level, forever. A recovery path that
+can loop is worse than no recovery path, because the failure mode is a browser that never settles
+rather than an error message.
+
+**Wrong org.** `POST /auth/refresh` cannot know which org you were in — `refresh_tokens` has no org
+column — so it re-issues for the alphabetically-first membership. The replay then sent the *original*
+org-B request with an *org-A* token, which the server correctly answered `404`. The console reported
+"not found" for a stale token, and the module token was org A while the app still thought it was org
+B, so every subsequent action 404'd until the user clicked something else.
+
+The client now tracks which org its token is scoped to, and after refreshing it re-mints for that org
+before replaying. `retried` bounds it to one attempt. Both are asserted in the browser, not in a
+unit test, because the bug was in the interaction between the client's memory and the server's
+answer:
+
+```
+a stale token is recovered from exactly once, in the right org    ok
+a server that ALWAYS says TOKEN_STALE does not loop forever       ok
+```
+
+The second test signs in *first* and installs the route afterwards. My first version installed the
+route before sign-in, so the initial devices load failed, the recovery correctly gave up, and the
+console signed itself out — and the helper was then waiting for an `app-shell` that had legitimately
+gone. The behaviour was right and the test was wrong, which is the fourth time this phase that
+sentence has been true.
+
 ### The pattern across all three
 
 Every one is a check I ran, and none of them was a check that could fail. I asserted the 401 and
