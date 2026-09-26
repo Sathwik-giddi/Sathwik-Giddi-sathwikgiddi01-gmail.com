@@ -115,8 +115,11 @@ said something other than what it was written to say.
 | 24 | Restore and rollback tests | **partial** | The database is a single file, so restore is `npm run db:reset` and the whole fixture rebuild is exercised on every test run. What is not tested is restoring a *production* database from a backup, because there is no backup process. |
 | 25 | Owner and incident plan | **partial** | Every finding in `BUILD-LOG.md` and `DECISIONS.md` is attributed and dated, and this document names an owner-less gap as a gap. There is no on-call rotation or published incident process, which is a people question rather than a repository one. |
 
-**Ten checks are fully met, six are partial, four are n/a, and the four partials are listed above
-with what is missing rather than argued away.**
+**Seventeen are met, four are partial, three are n/a, and one is not built. The five that are not
+fully met are listed above with what is missing rather than argued away** — and the first version of
+this line said "ten met, six partial, four n/a", which was simply a miscount. It is worth recording
+that the tally was written from memory rather than counted, in a document whose entire argument is
+about not asserting things that were not measured.
 
 ---
 
