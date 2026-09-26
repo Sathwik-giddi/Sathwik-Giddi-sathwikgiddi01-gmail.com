@@ -608,6 +608,118 @@ I looked for a place where a process-wide permission cache would pay, and could 
 statements and 1.6 ms means there is no hot path to cache. The per-request resolver stays, and the
 argument for it is now a measurement rather than a precaution.
 
+## 2026-09-26 · Phase 9 — an audit of my own code, after reading other people's
+
+The plan for this phase came from an odd source. I was asked to compare my submission against three
+other teams' public submissions and find what they had that I did not. I expected a feature list.
+What I got instead was the opposite: my route surface is a strict superset of all three, my five
+shipped test files are byte-identical to theirs, and of the twenty invariants in the one suite any
+of them wrote that I do not have, my build already passed eighteen. One competitor submitted an
+unmodified stub.
+
+So the useful move was not to read theirs. It was to point two adversarial agents at **my** code
+and tell them to break it. Thirty-eight findings came back — five critical, twelve major, twenty-one
+minor — and the first three are the subject of this entry, because they are the worst kind of bug:
+each one is a control I wrote a comment *claiming* works, and which does nothing at all.
+
+### 1. One unauthenticated request killed the server
+
+`server/index.js` shipped with `serveStatic`, and its first line was
+`normalize(decodeURIComponent(url.pathname))`. `decodeURIComponent` **throws** `URIError` on a
+malformed escape. I had read that line, and read it as obviously-fine, because the `%` in a URL is
+something you decode and move on from.
+
+```
+$ curl 'http://localhost:8391/%ff'
+curl rc=52
+$ curl localhost:8391/v1/auth/me
+CONNECTION REFUSED
+$ lsof -ti:8391 | wc -l
+0
+```
+
+No token, no valid route, one request, and the process is gone — no supervisor under `npm start`.
+This is a denial of service on the exact process the live walkthrough is run against, and it came
+from **given code**, which is why the twelve shipped assertions never found it. They test the
+engine, and the engine is fine; the engine is not what crashed.
+
+Fixed by guarding the decode and returning `400 VALIDATION` for a malformed path, plus a
+last-resort `uncaughtException` / `unhandledRejection` net that logs and keeps serving. I argued
+myself into the net reluctantly: swallowing exceptions is normally wrong, and this is not a licence
+to ignore them. The argument for it is that SQLite is synchronous, so a throw inside a handler
+cannot leave a transaction half-applied — the state really is intact — and the cost of being wrong
+in this direction is a server that never comes back.
+
+The assertion that actually pins the bug is not the 400. It is the next line: *and the server is
+still serving*. A test that only checks the status code would have passed against the crashing
+version, because the crash also means no status code.
+
+### 2. The refresh-replay defence was decorative
+
+`server/routes/auth.js` — the comment, verbatim, on the branch that handles a replayed token:
+
+> *"reuse of an already-rotated token means the cookie leaked: kill the whole family, so the attacker
+> and the victim both lose the lineage"*
+
+And `issueFor` mints `newId('fam')` on **every** issue, including every rotation. A family is a
+family of one. `revokeFamily` updates `WHERE family_id = ?` and matches the one row that is already
+revoked — zero rows changed, and the control is inert. Verified end to end:
+
+```
+login                    200   cookie1
+refresh(cookie1)         200   cookie2 (rotated)
+REPLAY cookie1           401   <- detection fires, as designed
+refresh(cookie2)         200   <- and the new lineage is STILL ALIVE
+```
+
+That last line is the bug. Detection worked; the consequence did not. An attacker who burns the
+stolen token *triggers* my detection and keeps a working session. And my `BUILD-LOG.md` and
+`DECISIONS.md` both repeat the false claim, which is worse than the bug: a reviewer reads the
+write-up, believes the control works, and never looks.
+
+**This is the finding I would open in the walkthrough**, because the shape of it is the lesson: I
+tested that the refusal happened and never tested what the refusal was *for*.
+
+### 3. Sign-out was cosmetic, and a reload undid it
+
+`PUBLIC_ROUTES` in `server/index.js` lists the four unauthenticated endpoints. `POST /auth/logout`
+is not among them, so it requires a bearer token — and `web/api.js` calls it with `{ auth: false }`,
+sending no `Authorization` header at all. The route was unreachable from the only client that calls
+it, and the console discarded the failure in a bare `catch {}`.
+
+```
+login                    200   cookie set
+logout (no Authorization)      401   <- what the console actually sends
+refresh after logout      200        <- still signed in
+```
+
+So: sign in, click Sign out, press F5, and the console comes back. The one control whose entire
+job is to end the session did not end it. The fix is one line — the cookie *is* the credential, so
+the route belongs in `PUBLIC_ROUTES` — and it is in the next commit with the family fix, because
+both are about the same thing: I never verified that a security control had a *consequence*.
+
+### The pattern across all three
+
+Every one is a check I ran, and none of them was a check that could fail. I asserted the 401 and
+did not assert that the token died. I asserted the 400 and did not assert that the process lived.
+I asserted the sign-out and did not reload. A test that cannot fail is not evidence, and the tell
+is always the same: **the assertion stops one step short of the thing you actually care about.**
+
+### Four more of the same shape, from the same audit
+
+- `GET /v1/orgs/{org}/devices` returned `total: 5` to a caller who received **4 rows** — the row
+  filter was correct and then `total` undid it, telling the viewer exactly how many machines they
+  cannot see. A real information leak, sitting one field away from code that was right.
+- Suspending a member never called `assertCanModify`, so an **admin suspended the org owner** —
+  while changing that same owner's *role* correctly returned 403. Two answers to the same question
+  from two routes.
+- The device-transfer route returned 403 for an org you belong to and 404 for one you do not, so
+  the id space distinguishes "exists" from "does not exist". `PERMISSIONS.md §5` forbids exactly
+  this in a paragraph.
+- `POST /auth/refresh` re-scopes to the alphabetically-first org, so refreshing can hand back a
+  credential for a *different organization* than the one you were in. I had written this up as a
+  harmless schema consequence; it is a credential-scope change, which is a different category.
+
 ## Open threads
 
 Things I know are wrong, unfinished, or that I would do differently. Listed honestly because they

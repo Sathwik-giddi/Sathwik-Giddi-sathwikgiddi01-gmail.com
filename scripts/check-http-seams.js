@@ -52,6 +52,23 @@ async function call(method, path, { token, body, headers = {} } = {}) {
 // Returns null for ANY failure, including a missing token on a 200. Two of my checks were
 // `x !== null`, which is TRUE for `undefined` — so a sign-in that returned no token at all read as
 // a pass and the real failure surfaced four lines later as a missing Authorization header.
+/**
+ * A request to an ABSOLUTE path. `call()` above is relative to /v1, which is right for the API and
+ * wrong for the two things this file also needs to exercise: the SPA fallback in `serveStatic`, and
+ * proving the process is still alive. Writing '/%ff' through `call()` would have produced
+ * '/v1/%ff', which the router 404s before reaching the code under test — a test that passes because
+ * it tested the wrong thing, which is the failure mode this file exists to catch.
+ */
+async function raw(method, path, { token, headers = {} } = {}) {
+  const h = { ...headers };
+  if (token) h.authorization = `Bearer ${token}`;
+  const res = await fetch(`${BASE.replace(/\/v1$/, '')}${path}`, { method, headers: h });
+  const text = await res.text();
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* not json */ }
+  return { status: res.status, body: json, code: json?.error?.code ?? null, reason: json?.error?.reason ?? null };
+}
+
 const login = async (email, password = 'demo1234') => {
   const r = await call('POST', '/auth/login', { body: { email, password } });
   if (r.status !== 200 || typeof r.body?.token !== 'string') {
@@ -539,6 +556,55 @@ console.log('\n== the audit log records the refusals, with reasons ==');
   // Every change produced exactly ONE row, not two.
   const creates = audit.body.events.filter((e) => e.action === 'grant.create' && e.result === 'allow');
   check('one success row per grant created, not two', creates.length >= 1, true);
+}
+
+// =============================================================================
+console.log('\n== malformed input must never be a 500, and never a dead process ==');
+{
+  // Each of these was a 500 or a process kill. They are grouped because they share one cause
+  // class: a client-supplied string handed to a function that throws on bad input, somewhere on a
+  // path with no try/catch around it.
+  const t = await login('owner@acme.test');
+
+  // Sanity: the raw helper is really reaching the server (otherwise every assertion below is a
+  // 404 that proves nothing).
+  check('the raw helper reaches the SPA route', (await raw('GET', '/')).status, 200);
+
+  // 1. The process-killer. `GET /%ff` made serveStatic throw URIError straight out of the
+  //    request listener, and the whole server went with it.
+  const killed = await raw('GET', '/%ff');
+  check('a malformed percent-escape is a 400, not a crash', [killed.status, killed.code], [400, 'VALIDATION']);
+
+  // 2. And the server is still there afterwards — the assertion that actually pins the bug.
+  const alive = await call('GET', '/auth/me', { token: t });
+  check('  ...and the server is still serving', alive.status, 200);
+
+  // 3. Same throw, reached through the router's parameter decoding, on PUBLIC routes.
+  for (const [label, method, path] of [
+    ['GET  /v1/invites/%ff        (public)', 'GET', '/v1/invites/%ff'],
+    ['POST /v1/invites/%zz/accept (public)', 'POST', '/v1/invites/%zz/accept'],
+  ]) {
+    const r = await call(method, path);
+    check(`${label} -> 404, not 500`, [r.status, r.code], [404, 'NOT_FOUND']);
+  }
+  check('  ...authenticated routes with a bad segment -> 404 too', (await call('GET', '/sessions/%ff', { token: t })).status, 404);
+
+  // 4. A malformed cookie, on the PUBLIC refresh endpoint the console hits on every page load.
+  for (const cookie of ['rt=%', 'rt=%ZZ', 'rt=%E0%A4%A', 'x=%']) {
+    const r = await call('POST', '/auth/refresh', { headers: { cookie } });
+    check(`Cookie: ${cookie.padEnd(12)} -> 401, not 500`, [r.status, r.code], [401, 'UNAUTHENTICATED']);
+  }
+
+  // 5. A good cookie still works, so the guard did not break the happy path.
+  const jar = await fetch(`${BASE}/auth/login`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: 'owner@acme.test', password: 'demo1234' }),
+  });
+  const good = jar.headers.get('set-cookie').split(';')[0];
+  check('a well-formed refresh cookie still refreshes', (await call('POST', '/auth/refresh', { headers: { cookie: good } })).status, 200);
+
+  // 6. The process is demonstrably alive at the end of all of that.
+  check('the process survived every one of those requests', (await call('GET', '/auth/me', { token: t })).status, 200);
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'} — ${pass} passed, ${fail} failed\n`);

@@ -27,7 +27,17 @@ export function createRouter() {
         const seg = r.segments[i];
         const param = PARAM.exec(seg);
         if (param) {
-          params[param[1]] = decodeURIComponent(parts[i]);
+          // `decodeURIComponent` throws on a malformed escape, and this runs inside the request
+          // listener's callee — so an unguarded throw here was a 500 on a *public* route
+          // (`GET /v1/invites/%ff` needs no token). A segment we cannot decode cannot name a real
+          // resource, so the honest answer is that nothing matched: the caller gets the same 404
+          // as any unknown id, and learns nothing about what does exist.
+          try {
+            params[param[1]] = decodeURIComponent(parts[i]);
+          } catch {
+            ok = false;
+            break;
+          }
         } else if (seg !== parts[i]) {
           ok = false;
           break;

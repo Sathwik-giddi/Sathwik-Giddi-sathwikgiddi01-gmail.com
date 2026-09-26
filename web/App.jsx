@@ -42,8 +42,15 @@ export function App() {
   // unauthenticated visitor never sees the shell, which is also what keeps the org name out of the
   // page for `tests/ui.spec.js:308`.
   const path = window.location.pathname;
-  const inviteMatch = /^\/invite\/(.+)$/.exec(path);
-  if (inviteMatch) return <AcceptInvite token={decodeURIComponent(inviteMatch[1])} />;
+  // `decodeURIComponent` throws on a malformed escape, and this runs during render — so `/invite/%ff`
+  // would blank the page instead of showing the same "this link did not work" every other bad
+  // token gets. An undecodable token is simply a token the server will refuse, so treat it as one.
+  const inviteToken = (() => {
+    const match = /^\/invite\/(.+)$/.exec(path);
+    if (!match) return null;
+    try { return decodeURIComponent(match[1]); } catch { return match[1]; }
+  })();
+  if (inviteToken !== null) return <AcceptInvite token={inviteToken} />;
 
   // ---- session ------------------------------------------------------------
   const [me, setMe] = useState(null);

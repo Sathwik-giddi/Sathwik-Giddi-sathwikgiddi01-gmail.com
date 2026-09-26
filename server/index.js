@@ -76,7 +76,20 @@ const MIME = {
 
 async function serveStatic(req, res, url) {
   // normalize() collapses '..' so a crafted path cannot escape dist/.
-  const rel = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, '');
+  //
+  // The decode is guarded because `decodeURIComponent` THROWS `URIError` on a malformed
+  // percent-escape — `GET /%ff` is enough — and this function is called straight from the request
+  // listener with nothing in between. Unguarded, that throw was an uncaught exception and it took
+  // the whole process down: one unauthenticated request, no valid route needed, and `npm start`
+  // has no supervisor to bring it back. Verified before the fix: after a single `GET /%ff` the
+  // listener count on the port went to zero and every subsequent request was connection-refused.
+  let rel;
+  try {
+    rel = normalize(decodeURIComponent(url.pathname)).replace(/^(\.\.[/\\])+/, '');
+  } catch {
+    return send(res, 400, { error: { code: 'VALIDATION', message: 'malformed request path', reason: 'malformed_path', requestId: null } });
+  }
+
   let file = join(DIST, rel);
 
   try {
@@ -131,3 +144,24 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     });
   });
 }
+
+// ---------------------------------------------------------------------------
+// Last-resort net.
+//
+// Everything above this line is inside a try/catch, and that is where a failure belongs: a request
+// gets a response and the process carries on. This handler exists for the class of bug where
+// something throws on a path nobody guarded — the `decodeURIComponent` one above was found by
+// sending `GET /%ff` and watching the process disappear.
+//
+// It logs loudly and keeps serving, deliberately. The alternative — an uncaught exception
+// terminating the process — means one malformed request takes down a server whose whole job is
+// answering requests, and `npm start` has no supervisor. Nothing here mutates state: SQLite is
+// synchronous, so a throw inside a handler cannot leave a transaction half-applied.
+// ---------------------------------------------------------------------------
+process.on('uncaughtException', (err) => {
+  console.error('[uncaught] continuing after:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandled rejection] continuing after:', reason);
+});

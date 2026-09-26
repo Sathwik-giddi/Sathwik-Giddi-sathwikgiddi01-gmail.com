@@ -18,8 +18,24 @@ export function parseCookies(req) {
     const eq = part.indexOf('=');
     if (eq < 1) continue;
     const name = part.slice(0, eq).trim();
-    const value = part.slice(eq + 1).trim();
-    if (name.length > 0) out[name] = decodeURIComponent(value);
+    const raw = part.slice(eq + 1).trim();
+    if (name.length === 0) continue;
+
+    // A cookie value is attacker-controlled and `decodeURIComponent` throws on a malformed escape
+    // — `Cookie: rt=%` was enough. This parser runs on `POST /v1/auth/refresh`, which is PUBLIC and
+    // which the console calls on every single page load, so an unguarded throw there meant one
+    // stray percent sign anywhere on the origin bricked the boot path with a 500.
+    //
+    // A value that will not decode is kept raw rather than dropped: the token is compared by hash,
+    // so a mangled value simply fails to match, which is the correct outcome and needs no special
+    // case. The one thing that must not happen is throwing.
+    let value = raw;
+    try {
+      value = decodeURIComponent(raw);
+    } catch {
+      /* keep the raw value; it will not match any token hash */
+    }
+    out[name] = value;
   }
   return out;
 }
